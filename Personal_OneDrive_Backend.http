@@ -1,0 +1,6 @@
+@Personal_OneDrive_Backend_HostAddress = http://localhost:5063
+
+GET {{Personal_OneDrive_Backend_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

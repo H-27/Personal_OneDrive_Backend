@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "AL0Is+Umhqg=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Work\\VSCodeProjects\\Personal_OneDrive_Backend\\Personal_OneDrive_Backend.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.openapi\\10.0.8\\microsoft.aspnetcore.openapi.10.0.8.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\microsoft.openapi\\2.0.0\\microsoft.openapi.2.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}
