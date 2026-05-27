@@ -18,6 +18,14 @@ builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration,
 
 builder.Services.AddAuthorization();
 
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("StrictStaticSite",
+        policy => policy.WithOrigins("https://your-actual-static-site.com") // <-- Put your final domain here!
+                        .AllowAnyMethod()
+                        .AllowAnyHeader());
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -52,8 +60,15 @@ app.MapGet("/login-success", (HttpContext context) =>
 });
 
 // Get a list of images in the folder and return it as a JSON response
-app.MapGet("/get-image_list", async (GraphServiceClient graphClient) =>
+app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
 {
+    // 1. Check if the request contains our custom secret header
+    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+        extractedKey != config["CustomApiKey"])
+    {
+        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+    }
+
     try
     {
         // 1. Get your drive ID
@@ -84,8 +99,15 @@ app.MapGet("/get-image_list", async (GraphServiceClient graphClient) =>
 .WithName("GetImageList");
 
 // Download all images in the folder as a zip file
-app.MapGet("/download-all-images", async (GraphServiceClient graphClient) =>
+app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
 {
+    // 1. Check if the request contains our custom secret header
+    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+        extractedKey != config["CustomApiKey"])
+    {
+        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+    }
+
     try
     {
         var driveItem = await graphClient.Me.Drive.GetAsync();
@@ -129,8 +151,15 @@ app.MapGet("/download-all-images", async (GraphServiceClient graphClient) =>
 }).WithName("DownloadAllImages");
 
 // Upload images to the folder
-app.MapPost("/upload-images", async (HttpRequest request, GraphServiceClient graphClient) =>
+app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
 {
+    // 1. Check if the request contains our custom secret header
+    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+        extractedKey != config["CustomApiKey"])
+    {
+        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+    }
+
     try
     {
         if (!request.HasFormContentType)
@@ -174,8 +203,15 @@ app.MapPost("/upload-images", async (HttpRequest request, GraphServiceClient gra
 }).WithName("UploadImages");
 
 // Get n random images from the folder for display on the homepage
-app.MapGet("/get-homepage-images/{count}", async (int count, GraphServiceClient graphClient) =>
+app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
 {
+    // 1. Check if the request contains our custom secret header
+    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+        extractedKey != config["CustomApiKey"])
+    {
+        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+    }
+
     try
     {
         var driveItem = await graphClient.Me.Drive.GetAsync();
@@ -214,3 +250,5 @@ app.MapGet("/get-homepage-images/{count}", async (int count, GraphServiceClient 
 
 
 app.Run();
+
+// dotnet user-secrets set "OneDriveApiKey" "YourSuperSecretPassword123!"
