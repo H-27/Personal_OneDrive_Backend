@@ -16,14 +16,22 @@ builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration,
     .AddMicrosoftGraph(builder.Configuration.GetSection("MicrosoftGraph"))
     .AddInMemoryTokenCaches();
 
+// Force the session cookie to allow Cross-Origin requests
+builder.Services.Configure<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme, options =>
+{
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+});
+
 builder.Services.AddAuthorization();
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("StrictStaticSite",
-        policy => policy.WithOrigins("https://your-actual-static-site.com") // <-- Put your final domain here!
+        policy => policy.SetIsOriginAllowed(_ => true) // Allows any origin
                         .AllowAnyMethod()
-                        .AllowAnyHeader());
+                        .AllowAnyHeader()
+                        .AllowCredentials()); // Allows cookies/auth headers to be sent
 });
 
 var app = builder.Build();
@@ -34,11 +42,21 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.UseHttpsRedirection();
+
+// Apply the CORS policy so your frontend can call the backend
+app.UseCors("StrictStaticSite");
+
+// Enable Cookie Policy for Cross-Origin cookies
+app.UseCookiePolicy(new CookiePolicyOptions
+{
+    MinimumSameSitePolicy = SameSiteMode.None,
+    Secure = CookieSecurePolicy.Always
+});
+
 // Enable authentication/authorization middleware
 app.UseAuthentication();
 app.UseAuthorization();
-
-app.UseHttpsRedirection();
 
 string foldername = "TaGea2026"; // Set the folder name
 
@@ -60,13 +78,16 @@ app.MapGet("/login-success", (HttpContext context) =>
 });
 
 // Get a list of images in the folder and return it as a JSON response
-app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
+app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header
-    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-        extractedKey != config["CustomApiKey"])
+    // 1. Check if the request contains our custom secret header (Skip in Development)
+    if (!env.IsDevelopment())
     {
-        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+            extractedKey != config["CustomApiKey"])
+        {
+            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        }
     }
 
     try
@@ -96,16 +117,20 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         return Results.Problem($"Failed to get OneDrive files: {ex.Message}");
     }
 })
-.WithName("GetImageList");
+.WithName("GetImageList")
+.RequireAuthorization();
 
 // Download all images in the folder as a zip file
-app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
+app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header
-    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-        extractedKey != config["CustomApiKey"])
+    // 1. Check if the request contains our custom secret header (Skip in Development)
+    if (!env.IsDevelopment())
     {
-        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+            extractedKey != config["CustomApiKey"])
+        {
+            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        }
     }
 
     try
@@ -148,16 +173,21 @@ app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration co
     {
         return Results.Problem($"Failed to download images: {ex.Message}");
     }
-}).WithName("DownloadAllImages");
+})
+.WithName("DownloadAllImages")
+.RequireAuthorization();
 
 // Upload images to the folder
-app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
+app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header
-    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-        extractedKey != config["CustomApiKey"])
+    // 1. Check if the request contains our custom secret header (Skip in Development)
+    if (!env.IsDevelopment())
     {
-        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+            extractedKey != config["CustomApiKey"])
+        {
+            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        }
     }
 
     try
@@ -200,16 +230,20 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
     {
         return Results.Problem($"Failed to upload images: {ex.Message}");
     }
-}).WithName("UploadImages");
+}).WithName("UploadImages")
+.RequireAuthorization();
 
 // Get n random images from the folder for display on the homepage
-app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, GraphServiceClient graphClient) =>
+app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header
-    if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-        extractedKey != config["CustomApiKey"])
+    // 1. Check if the request contains our custom secret header (Skip in Development)
+    if (!env.IsDevelopment())
     {
-        return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+            extractedKey != config["CustomApiKey"])
+        {
+            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+        }
     }
 
     try
@@ -246,9 +280,9 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
     {
         return Results.Problem($"Failed to get homepage images: {ex.Message}");
     }
-}).WithName("GetHomepageImages");
-
+}).WithName("GetHomepageImages")
+.RequireAuthorization();
 
 app.Run();
 
-// dotnet user-secrets set "OneDriveApiKey" "YourSuperSecretPassword123!"
+// dotnet user-secrets set "OneDriveApiKey"

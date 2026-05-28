@@ -1,0 +1,152 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>web_3</title>
+    <style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+<div style="width: 1920px; height: 4113px; position: relative; background: white; overflow: hidden">
+  <div style="width: 1011.98px; height: 4376.05px; left: -46.48px; top: -92.02px; position: absolute; background: linear-gradient(90deg, #3A7065 35%, #A9A73E 100%)"></div>
+  <div style="width: 1011.98px; height: 4376.05px; left: 1966.48px; top: 4284.02px; position: absolute; transform: rotate(180deg); transform-origin: top left; background: linear-gradient(90deg, #3A7065 35%, #A9A73E 100%)"></div>
+  <img style="width: 1338.57px; height: 246.48px; left: 273.71px; top: 102.52px; position: absolute" src="assets/images/Komponente_7.png" />
+  <img style="width: 250px; height: auto; left: 835px; top: 377px; position: absolute" src="assets/images/2026.png" />
+  
+  <div id="uploadBtn" style="width: 905px; height: 326px; left: 508px; top: 609px; position: absolute; background: #D83C08; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16), 0px 3px 6px rgba(0, 0, 0, 0.16) inset; border-radius: 88px; border: 1px white solid; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+    <img style="width: 529px; height: 203px" src="assets/images/Bilder%20Hochladen.png" />
+  </div>
+
+  <input type="file" id="fileUploadInput" multiple accept="image/*" style="display: none;" />
+
+  <div id="downloadBtn" style="width: 905px; height: 326px; left: 124px; top: 3641px; position: absolute; background: #D83C08; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16), 0px 3px 6px rgba(0, 0, 0, 0.16) inset; border-radius: 88px; border: 1px white solid; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+    <img style="width: 625px; height: 202px" src="assets/images/Ordnerherunterladen.png" />
+  </div>
+
+  <img class="gallery-img" style="width: 975px; height: 653px; left: 53.66px; top: 1296.02px; position: absolute; transform: rotate(-11deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 975px; height: 653px; left: 103.66px; top: 2405.79px; position: absolute; transform: rotate(-11deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 664.42px; height: 444.99px; left: 547.57px; top: 2633.27px; position: absolute; transform: rotate(86deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 664.42px; height: 444.99px; left: 770.08px; top: 2996.98px; position: absolute; transform: rotate(-9deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 975px; height: 653px; left: 920.66px; top: 2182.71px; position: absolute; transform: rotate(9deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 667.21px; height: 446.86px; left: 1101.49px; top: 1488.58px; position: absolute; transform: rotate(101deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 667.21px; height: 446.86px; left: 1616.98px; top: 1061.36px; position: absolute; transform: rotate(75deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 680px; height: 456px; left: 1736.56px; top: 2234.53px; position: absolute; transform: rotate(-174deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  <img class="gallery-img" style="width: 680px; height: 456px; left: 984.17px; top: 2271.33px; position: absolute; transform: rotate(164deg); transform-origin: top left; background: white; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+  
+  <img style="width: 485px; height: 491px; left: 1262px; top: 3539px; position: absolute" src="assets/images/Komponente_8.png" />
+
+</div><script>
+  // Setup the API base URL and Auth Key here (adjust during production mapping)
+  //const API_BASE_URL = 'http://localhost:5063'; // Defaulting to Localhost 5000 for now. Remember to change!
+  const API_BASE_URL = 'https://localhost:7089';
+  const CUSTOM_API_KEY = 'OV52i_5c3k2ocNbm9oGkeg';
+
+  const uploadBtn = document.getElementById('uploadBtn');
+  const fileUploadInput = document.getElementById('fileUploadInput');
+  const downloadBtn = document.getElementById('downloadBtn');
+
+  // TRIGGER HIDDEN FILE INPUT
+  uploadBtn.addEventListener('click', () => {
+    fileUploadInput.click();
+  });
+
+  // UPLOAD: Detect file selection and upload
+  fileUploadInput.addEventListener('change', async (event) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]); // Assuming the API takes 'files' as the field name
+    }
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/upload-images`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'X-Custom-Auth-Key': CUSTOM_API_KEY
+            },
+            body: formData
+        });
+
+        if (!response.ok) throw new Error('Upload failed');
+        
+        const result = await response.json();
+        alert(`Successfully uploaded ${result.length} file(s)!`);
+    } catch (error) {
+        console.error(error);
+        alert('Failed to upload files. Check the console for details.');
+    } finally {
+        fileUploadInput.value = ''; // Reset input to allow selecting same files again if needed
+    }
+  });
+
+  // DOWNLOAD FOLDER
+  downloadBtn.addEventListener('click', async () => {
+    try {
+        // We use fetch so we can securely pass the custom authorization header
+        const response = await fetch(`${API_BASE_URL}/download-all-images`, {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+                'X-Custom-Auth-Key': CUSTOM_API_KEY
+            }
+        });
+
+        if (!response.ok) throw new Error('Download request failed');
+
+        // Create a hidden link to trigger the download prompt with the returned zip BLOB
+        const blob = await response.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = 'images.zip'; // Matches the backend's returned name
+        document.body.appendChild(a);
+        a.click();
+        
+        a.remove();
+        window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+        console.error(error);
+        alert('Failed to download images. Check your network or API status.');
+    }
+  });
+  // FETCH AND DISPLAY RANDOM IMAGES ON LOAD
+  async function loadRandomImages() {
+    const galleryImages = document.querySelectorAll('.gallery-img');
+    if (galleryImages.length === 0) return;
+
+    try {
+        const count = galleryImages.length;
+        const response = await fetch(API_BASE_URL + '/get-homepage-images/' + count, {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+                'X-Custom-Auth-Key': CUSTOM_API_KEY
+            }
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch images');
+        
+        const imagesData = await response.json(); 
+        
+        for (let i = 0; i < imagesData.length && i < galleryImages.length; i++) {
+            galleryImages[i].src = imagesData[i].DownloadUrl;
+        }
+
+    } catch (error) {
+        console.error('Could not load gallery images:', error);
+    }
+  }
+
+  // Initial load
+  loadRandomImages();
+</script></body>
+</html>
+
+
+
+
+
