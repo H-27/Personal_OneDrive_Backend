@@ -131,7 +131,10 @@ app.MapGet("/login", async (HttpContext context) =>
 
 app.MapGet("/login-success", (HttpContext context) =>
 {
-    return Results.Ok("Authentication successful! Your backend is now linked to OneDrive.");
+    // This will print your unique personal user ID string to the console/logs
+    var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
+    Console.WriteLine($"YOUR ACCOUNT ID IS: {userId}");
+    return Results.Ok($"Authentication successful! Copy this ID for your frontend: {userId}");
 });
 
 app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
