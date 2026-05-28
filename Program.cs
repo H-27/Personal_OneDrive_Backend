@@ -256,11 +256,30 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
             if (string.IsNullOrEmpty(file.FileName)) continue;
 
             using var stream = file.OpenReadStream();
-            await graphClient.Drives[userDriveId]
+            
+            // Files over 4MB require an upload session in Microsoft Graph.
+            // Using CreateUploadSession handles files of any size safely.
+            var uploadSessionRequestBody = new Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession.CreateUploadSessionPostRequestBody
+            {
+                Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
+                {
+                    AdditionalData = new Dictionary<string, object>
+                    {
+                        { "@microsoft.graph.conflictBehavior", "replace" }
+                    }
+                }
+            };
+
+            var uploadSession = await graphClient.Drives[userDriveId]
                 .Root
                 .ItemWithPath($"{foldername}/{file.FileName}")
-                .Content
-                .PutAsync(stream);
+                .CreateUploadSession
+                .PostAsync(uploadSessionRequestBody);
+
+            int maxSliceSize = 320 * 1024; // 320 KB slices
+            var fileUploadTask = new Microsoft.Graph.LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(uploadSession, stream, maxSliceSize, graphClient.RequestAdapter);
+
+            await fileUploadTask.UploadAsync();
                 
             uploadedFiles.Add(file.FileName);
         }
