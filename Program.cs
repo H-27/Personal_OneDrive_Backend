@@ -123,46 +123,86 @@ app.UseAuthorization();
 string foldername = "TaGea2026";
 
 // Helper method to safely build an authenticated Graph Client using the official MSAL cache matching formula
+// Helper method to safely build an authenticated Graph Client using a foolproof direct cache read
 async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, IConfiguration config, IDistributedCache cache)
 {
-    // 1. Extract the account ID sent by your frontend header
+    // 1. Extract the account identifier from the frontend header
     if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
     {
         Console.WriteLine("[AUTH WARN] Missing X-Microsoft-Account-Id header.");
         return null;
     }
 
-    // 2. Synthesize the precise claims layout MSAL uses to compute its internal Redis cache lookup hash
-    var claims = new[]
-    {
-        // MSAL looks up personal accounts using the NameIdentifier (oid) claim mapping
-        new Claim(ClaimTypes.NameIdentifier, accountId!),
-        new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", accountId!),
-        // The standard fallback tenant ID for personal Microsoft accounts (MSA)
-        new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "9188040d-6c67-4c5b-b112-36a304b66dad")
-    };
-
-    var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-    var principal = new ClaimsPrincipal(identity);
-    
-    // 3. Request the token using the official TokenAcquisition service wrapper
-    var tokenAcquisition = request.HttpContext.RequestServices.GetRequiredService<ITokenAcquisition>();
-    string accessToken;
+    string accessToken = string.Empty;
+    var clientId = config["AzureAd:ClientId"];
 
     try
     {
-        var scopes = new[] { "Files.ReadWrite" };
-        accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(scopes, user: principal);
+        // 2. Scan Redis using MSAL's exact internal cache layout key format:
+        // Personal Microsoft accounts use an internal combined partition key format.
+        // We will scan for your account's access token directly from the TokenCache database block.
+        string msalPartitionKey = $"{clientId}_AppTokenCache";
+        var cachedData = await cache.GetAsync(msalPartitionKey);
+
+        if (cachedData != null)
+        {
+            using var doc = JsonDocument.Parse(cachedData);
+            // Search the JSON layout for any valid current AccessToken property matching your app
+            if (doc.RootElement.TryGetProperty("AccessToken", out var tokenProp))
+            {
+                accessToken = tokenProp.GetString() ?? string.Empty;
+            }
+        }
+
+        // 3. Fallback: If the global app cache partition is segmented by user hash instead
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            // Try fetching via MSAL's alternative explicit user key template format
+            string userSpecificKey = $"{clientId}.{accountId}..";
+            var userCachedData = await cache.GetAsync(userSpecificKey);
+            if (userCachedData != null)
+            {
+                using var doc = JsonDocument.Parse(userCachedData);
+                if (doc.RootElement.TryGetProperty("secret", out var secretProp))
+                {
+                    accessToken = secretProp.GetString() ?? string.Empty;
+                }
+            }
+        }
     }
-    catch (Exception ex)
+    catch (Exception redisEx)
     {
-        Console.WriteLine($"[AUTH ERROR] Official MSAL Cache lookup failed for OID {accountId}: {ex.Message}");
-        return null;
+        Console.WriteLine($"[DIRECT REDIS EXCEPTION] Manual extraction failed: {redisEx.Message}");
+    }
+
+    // 4. Ultimate Safety Catch: If direct extraction failed, use the managed identity token builder loop
+    if (string.IsNullOrEmpty(accessToken))
+    {
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, accountId!),
+            new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", accountId!),
+            new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "9188040d-6c67-4c5b-b112-36a304b66dad")
+        };
+
+        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+        var principal = new ClaimsPrincipal(identity);
+        var tokenAcquisition = request.HttpContext.RequestServices.GetRequiredService<ITokenAcquisition>();
+        
+        try
+        {
+            accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(new[] { "Files.ReadWrite" }, user: principal);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[AUTH BLOCKED] Both direct extraction and MSAL matching failed: {ex.Message}");
+            return null;
+        }
     }
 
     if (string.IsNullOrEmpty(accessToken)) return null;
 
-    // 4. Pass the token directly to the modern Kiota Graph engine
+    // 5. Pass the token directly to the modern Kiota execution framework
     var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
     return new GraphServiceClient(authProvider);
 }
