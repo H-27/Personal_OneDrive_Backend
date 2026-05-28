@@ -21,9 +21,9 @@ builder.Services.AddStackExchangeRedisCache(options =>
 // Configure Data Protection to use Redis so auth cookies survive container restarts
 if (!string.IsNullOrEmpty(redisConnectionString))
 {
-    // Fix: We append abortConnect=false so if Upstash takes a second to wake up, the backend doesn't instantly crash on boot
     var config = ConfigurationOptions.Parse(redisConnectionString);
     config.AbortOnConnectFail = false;
+    config.Ssl = true; // Force SSL for Upstash!
     
     var redis = ConnectionMultiplexer.Connect(config);
     builder.Services.AddDataProtection()
