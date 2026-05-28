@@ -147,7 +147,7 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         return Results.Ok(fileNames);
     }
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
-}).RequireAuthorization();
+});
 
 app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
@@ -198,7 +198,7 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
             await context.Response.WriteAsync($"Failed: {ex.Message}");
         }
     }
-}).RequireAuthorization();
+});
 
 app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
@@ -242,7 +242,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         return Results.Ok(new { Message = "Files uploaded successfully", Files = uploadedFiles });
     }
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
-}).WithName("UploadImages").RequireAuthorization();
+}).WithName("UploadImages");
 
 app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
@@ -271,6 +271,6 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
         return Results.Ok(randomImages);
     }
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
-}).RequireAuthorization();
+});
 
 app.Run();
