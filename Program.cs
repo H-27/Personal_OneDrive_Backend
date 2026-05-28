@@ -7,8 +7,9 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
 using System.Security.Claims;
-using Microsoft.Kiota.Abstractions;
 using Microsoft.Kiota.Abstractions.Authentication;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -121,31 +122,59 @@ app.UseAuthorization();
 
 string foldername = "TaGea2026";
 
-// Helper method to safely build a cookie-free authenticated Graph Client using the custom account header identifier
-async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, ITokenAcquisition tokenAcquisition)
+// Helper method to safely build an authenticated Graph Client using direct Redis context processing
+async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, IConfiguration config, IDistributedCache cache)
 {
     if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
     {
         return null;
     }
 
-    // Synthesize a minimal ClaimsPrincipal identity matching the structure MSAL uses inside Redis key mapping
-    var identity = new ClaimsIdentity(new[]
+    string accessToken = string.Empty;
+    var clientId = config["AzureAd:ClientId"];
+
+    try
     {
-        new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", accountId!),
-        new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "9188040d-6c67-4c5b-b112-36a304b66dad") // Common personal account tenant fallback
-    }, CookieAuthenticationDefaults.AuthenticationScheme);
+        // Query the Redis layer directly to pluck the token using MSAL's internal fallback string naming signature
+        string cacheKey = $"{clientId}_AppTokenCache";
+        var cachedData = await cache.GetAsync(cacheKey);
 
-    var principal = new ClaimsPrincipal(identity);
-    var scopes = new[] { "Files.ReadWrite" };
+        if (cachedData != null)
+        {
+            using var doc = JsonDocument.Parse(cachedData);
+            if (doc.RootElement.TryGetProperty("AccessToken", out var tokenProp))
+            {
+                accessToken = tokenProp.GetString() ?? string.Empty;
+            }
+        }
+    }
+    catch (Exception redisEx)
+    {
+        Console.WriteLine($"[DIRECT REDIS READ WARN] {redisEx.Message}");
+    }
 
-    // Fetch the token manually out of Redis via the synthesized user principal profile context
-    string accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(scopes, user: principal);
+    // Direct Safe Interception Fallback if structural keys are segregated differently
+    if (string.IsNullOrEmpty(accessToken))
+    {
+        var identity = new ClaimsIdentity(new[]
+        {
+            new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", accountId!),
+            new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "9188040d-6c67-4c5b-b112-36a304b66dad")
+        }, CookieAuthenticationDefaults.AuthenticationScheme);
 
-    // Using the fundamental BaseBearerTokenAuthenticationProvider to guarantee clean compilation
+        var principal = new ClaimsPrincipal(identity);
+        var tokenAcquisition = request.HttpContext.RequestServices.GetRequiredService<ITokenAcquisition>();
+        try
+        {
+            accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(new[] { "Files.ReadWrite" }, user: principal);
+        }
+        catch { /* Fallback container isolation */ }
+    }
+
+    if (string.IsNullOrEmpty(accessToken)) return null;
+
+    // Directly assign token using standard authorization headers to ensure compatibility with Microsoft Kiota core engines
     var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
-    
-    // Instantiates the Graph service execution workspace
     return new GraphServiceClient(authProvider);
 }
 
@@ -164,7 +193,7 @@ app.MapGet("/login-success", (HttpContext context) =>
     return Results.Ok($"Authentication successful! Copy this ID for your frontend: {userId}");
 });
 
-app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
+app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -173,7 +202,7 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
     }
     try
     {
-        var graphClient = await GetAuthenticatedGraphClientAsync(request, tokenAcquisition);
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Missing or invalid background authentication data.");
 
         var drive = await graphClient.Drives["root"].GetAsync();
@@ -184,7 +213,7 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
 });
 
-app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
+app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -196,7 +225,7 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
     }
     try
     {
-        var graphClient = await GetAuthenticatedGraphClientAsync(context.Request, tokenAcquisition);
+        var graphClient = await GetAuthenticatedGraphClientAsync(context.Request, config, cache);
         if (graphClient == null) { context.Response.StatusCode = 400; return; }
 
         var drive = await graphClient.Drives["root"].GetAsync();
@@ -238,7 +267,7 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
     }
 });
 
-app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
+app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -252,7 +281,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         var files = form.Files;
         if (files.Count == 0) return Results.BadRequest("No files uploaded.");
 
-        var graphClient = await GetAuthenticatedGraphClientAsync(request, tokenAcquisition);
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Invalid authentication initialization data.");
 
         var drive = await graphClient.Drives["root"].GetAsync();
@@ -285,7 +314,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
 }).WithName("UploadImages");
 
-app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
+app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -294,7 +323,7 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
     }
     try
     {
-        var graphClient = await GetAuthenticatedGraphClientAsync(request, tokenAcquisition);
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Invalid initialization metadata.");
 
         var drive = await graphClient.Drives["root"].GetAsync();
@@ -319,7 +348,7 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
 
 app.Run();
 
-// A tiny, fully compliant native token supplier for modern Microsoft Kiota runtimes
+// Token provider mapping class to interface safely with modern Microsoft Kiota runtimes
 public class InMemoryTokenProvider : IAccessTokenProvider
 {
     private readonly string _token;
