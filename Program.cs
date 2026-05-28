@@ -152,15 +152,16 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
 .RequireAuthorization();
 
 // Download all images in the folder as a zip file
-app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
+app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
     // 1. Check if the request contains our custom secret header (Skip in Development)
     if (!env.IsDevelopment())
     {
-        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
+        if (!context.Request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
             extractedKey != config["CustomApiKey"])
         {
-            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
+            context.Response.StatusCode = 401; // Block them with a 401 Unauthorized instantly
+            return;
         }
     }
 
@@ -178,15 +179,23 @@ app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration co
         var files = childrenResponse?.Value?.Where(i => i.Folder == null).ToList();
         if (files == null || files.Count == 0)
         {
-            return Results.NotFound("No files found to download.");
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsync("No files found to download.");
+            return;
         }
 
-        using var memoryStream = new MemoryStream();
-        using (var archive = new System.IO.Compression.ZipArchive(memoryStream, System.IO.Compression.ZipArchiveMode.Create, true))
+        // Setup headers to start downloading instantly in the browser
+        context.Response.ContentType = "application/zip";
+        context.Response.Headers.Append("Content-Disposition", "attachment; filename=\"images.zip\"");
+
+        // Stream DIRECTLY to the client's browser as we fetch from Microsoft!
+        // No memory buffer, no freezing!
+        using (var archive = new System.IO.Compression.ZipArchive(context.Response.Body, System.IO.Compression.ZipArchiveMode.Create))
         {
             foreach (var file in files)
             {
                 if (file.Id == null || file.Name == null) continue;
+                
                 var contentStream = await graphClient.Drives[userDriveId].Items[file.Id].Content.GetAsync();
                 if (contentStream != null)
                 {
@@ -196,13 +205,14 @@ app.MapGet("/download-all-images", async (HttpRequest request, IConfiguration co
                 }
             }
         }
-        
-        memoryStream.Position = 0;
-        return Results.File(memoryStream.ToArray(), "application/zip", "images.zip");
     }
     catch (Exception ex)
     {
-        return Results.Problem($"Failed to download images: {ex.Message}");
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = 500;
+            await context.Response.WriteAsync($"Failed to download images: {ex.Message}");
+        }
     }
 })
 .WithName("DownloadAllImages")
