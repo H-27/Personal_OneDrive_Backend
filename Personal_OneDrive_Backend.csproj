@@ -9,11 +9,11 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.8" />
     <PackageReference Include="Microsoft.Graph" Version="6.1.0" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.84.1" />
     <PackageReference Include="Microsoft.Identity.Web" Version="4.10.0" />
     <PackageReference Include="Microsoft.Identity.Web.GraphServiceClient" Version="4.10.0" />
-    <PackageReference Include="NeoSmart.Caching.Sqlite.AspNetCore" Version="9.0.1" />
   </ItemGroup>
 
 </Project>

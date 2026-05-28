@@ -9,13 +9,11 @@ using NeoSmart.Caching.Sqlite;
 // Initialize the web server
 var builder = WebApplication.CreateBuilder(args);
 
-// Setup persistent SQLite Cache so graph tokens survive container restarts
-string cacheDir = Path.Combine(builder.Environment.ContentRootPath, "cache");
-if (!Directory.Exists(cacheDir)) {
-    Directory.CreateDirectory(cacheDir);
-}
-builder.Services.AddSqliteCache(options => {
-    options.CachePath = Path.Combine(cacheDir, "token_cache.db");
+// Setup persistent Redis Cache so graph tokens survive container restarts
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString("Redis");
+    options.InstanceName = "TokenCache_";
 });
 
 // Add services to the container.
