@@ -9,7 +9,7 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Fetch the connection string safely
+// 1. Fetch and robustly format the Upstash Redis Connection
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 ConfigurationOptions? redisConfig = null;
 
@@ -17,9 +17,23 @@ if (!string.IsNullOrEmpty(redisConnectionString))
 {
     try
     {
-        redisConfig = ConfigurationOptions.Parse(redisConnectionString);
-        redisConfig.AbortOnConnectFail = false; 
-        redisConfig.Ssl = true;                 
+        // If the string already contains a port (like :6379), we strip it before forcing SSL 
+        // to prevent the driver from creating a broken hybrid port string like :6379:6380
+        if (redisConnectionString.Contains(".upstash.io:"))
+        {
+            // Split by the colon before the port number
+            var parts = redisConnectionString.Split(".upstash.io:");
+            var baseUri = parts[0] + ".upstash.io";
+            
+            redisConfig = ConfigurationOptions.Parse(baseUri);
+        }
+        else
+        {
+            redisConfig = ConfigurationOptions.Parse(redisConnectionString);
+        }
+
+        redisConfig.AbortOnConnectFail = false; // Prevents boot crashing
+        redisConfig.Ssl = true;                 // Enforces explicit secure SSL port (6380)
         redisConfig.CertificateValidation += (sender, certificate, chain, errors) => true;
     }
     catch (Exception ex)
@@ -28,14 +42,14 @@ if (!string.IsNullOrEmpty(redisConnectionString))
     }
 }
 
-// 1. Setup Distributed Token Cache with exception isolation
+// 2. Setup Distributed Token Cache with exception isolation
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.ConfigurationOptions = redisConfig; 
     options.InstanceName = "TokenCache_";
 });
 
-// 2. Configure Data Protection with a complete try-catch fallback
+// 3. Configure Data Protection with a complete try-catch fallback
 if (redisConfig != null)
 {
     try 
@@ -46,8 +60,6 @@ if (redisConfig != null)
     }
     catch (Exception ex)
     {
-        // Caught! If the SSL handshake or credential check fails, it logs here 
-        // instead of throwing an app-wide 500 error page.
         Console.WriteLine($"[DATA PROTECTION ERROR] Redis handoff failed. Falling back to memory keys: {ex.Message}");
     }
 }
