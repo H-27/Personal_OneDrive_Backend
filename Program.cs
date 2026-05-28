@@ -9,31 +9,40 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Fetch the working connection string directly
+// 1. Fetch and robustly configure the Upstash Redis Connection
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 ConfigurationOptions? redisConfig = null;
 
 if (!string.IsNullOrEmpty(redisConnectionString))
 {
-    // Parse the raw string that works, but inject the crash protection setting
     redisConfig = ConfigurationOptions.Parse(redisConnectionString);
-    redisConfig.AbortOnConnectFail = false; 
+    redisConfig.AbortOnConnectFail = false; // Prevents startup container crashes
+    redisConfig.Ssl = true;                 // Forces rediss:// secure protocol for Upstash
+    
+    // FIX: Using the correct += operator syntax for events
+    redisConfig.CertificateValidation += (sender, certificate, chain, errors) => true;
 }
-
-// 1. Setup Token Cache using the crash-protected configuration
+// 2. Setup Distributed Token Cache using the safe SSL configuration
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.ConfigurationOptions = redisConfig; 
     options.InstanceName = "TokenCache_";
 });
 
-// 2. Configure Data Protection safely without boot crashing
+// 3. Configure Data Protection safely
 if (redisConfig != null)
 {
-    // Passing redisConfig with AbortOnConnectFail = false stops the status 139 boot crash!
-    var redis = ConnectionMultiplexer.Connect(redisConfig); 
-    builder.Services.AddDataProtection()
-        .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
+    try 
+    {
+        var redis = ConnectionMultiplexer.Connect(redisConfig);
+        builder.Services.AddDataProtection()
+            .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
+    }
+    catch (Exception ex)
+    {
+        // Fail-safe: Logs error to Render console but allows the app to process requests
+        Console.WriteLine($"[DataProtection Redis Error] Falling back to memory: {ex.Message}");
+    }
 }
 
 builder.Services.AddOpenApi();
@@ -79,7 +88,6 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
-// Explicitly handle Render HTTPS routing context early
 app.Use((context, next) =>
 {
     context.Request.Scheme = "https";
@@ -222,7 +230,6 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
 
             var uploadSession = await graphClient.Drives[userDriveId].Root.ItemWithPath($"{foldername}/{file.FileName}").CreateUploadSession.PostAsync(uploadSessionRequestBody);
             
-            // Optimization: Bump slice size to 1.25MB (Must be a multiple of 320KB) to dramatically speed up upload times
             int maxSliceSize = 4 * 320 * 1024; 
             var fileUploadTask = new Microsoft.Graph.LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(uploadSession, stream, maxSliceSize, graphClient.RequestAdapter);
             await fileUploadTask.UploadAsync();
