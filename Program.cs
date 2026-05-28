@@ -19,10 +19,6 @@ if (!string.IsNullOrEmpty(redisConnectionString))
     {
         // Let the library natively parse your environment string without manual modifications
         redisConfig = ConfigurationOptions.Parse(redisConnectionString);
-        redisConfig.AbortOnConnectFail = false; 
-        
-        // Subscribe to the validation event using correct += syntax
-        redisConfig.CertificateValidation += (sender, certificate, chain, errors) => true;
     }
     catch (Exception ex)
     {
