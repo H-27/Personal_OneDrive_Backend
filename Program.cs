@@ -70,15 +70,18 @@ builder.Services.AddCors(options =>
             var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
             if (builder.Environment.IsDevelopment())
             {
-                policy.SetIsOriginAllowed(_ => true);
+                policy.SetIsOriginAllowed(_ => true)
+                      .AllowAnyMethod()
+                      .AllowAnyHeader()
+                      .AllowCredentials();
             }
             else
             {
-                policy.WithOrigins(allowedOrigins);
+                // FIXED: Explicit custom header allowance for live mobile environments
+                policy.WithOrigins(allowedOrigins)
+                      .AllowAnyMethod()
+                      .WithHeaders("X-Custom-Auth-Key", "Content-Type", "Accept", "Authorization");
             }
-            policy.AllowAnyMethod()
-                  .AllowAnyHeader()
-                  .AllowCredentials();
         });
 });
 
