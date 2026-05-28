@@ -65,6 +65,10 @@
             "Microsoft.Identity.Web.GraphServiceClient": {
               "target": "Package",
               "version": "[4.10.0, )"
+            },
+            "NeoSmart.Caching.Sqlite.AspNetCore": {
+              "target": "Package",
+              "version": "[9.0.1, )"
             }
           },
           "imports": [

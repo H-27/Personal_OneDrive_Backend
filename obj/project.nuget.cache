@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "qfugiAqSQp0=",
+  "dgSpecHash": "vvqQFGVLv9A=",
   "success": true,
   "projectFilePath": "C:\\Users\\Work\\VSCodeProjects\\Personal_OneDrive_Backend\\Personal_OneDrive_Backend.csproj",
   "expectedPackageFiles": [
@@ -12,6 +12,7 @@
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.authentication.openidconnect\\10.0.0\\microsoft.aspnetcore.authentication.openidconnect.10.0.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.openapi\\10.0.8\\microsoft.aspnetcore.openapi.10.0.8.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.bcl.asyncinterfaces\\8.0.0\\microsoft.bcl.asyncinterfaces.8.0.0.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\microsoft.data.sqlite.core\\9.0.2\\microsoft.data.sqlite.core.9.0.2.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.graph\\6.1.0\\microsoft.graph.6.1.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.graph.core\\4.0.1\\microsoft.graph.core.4.0.1.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.identity.abstractions\\12.0.0\\microsoft.identity.abstractions.12.0.0.nupkg.sha512",
@@ -41,6 +42,12 @@
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.kiota.serialization.multipart\\2.0.0\\microsoft.kiota.serialization.multipart.2.0.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.kiota.serialization.text\\2.0.0\\microsoft.kiota.serialization.text.2.0.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.openapi\\2.0.0\\microsoft.openapi.2.0.0.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\neosmart.caching.sqlite\\9.0.1\\neosmart.caching.sqlite.9.0.1.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\neosmart.caching.sqlite.aspnetcore\\9.0.1\\neosmart.caching.sqlite.aspnetcore.9.0.1.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\sqlitepclraw.bundle_green\\2.1.10\\sqlitepclraw.bundle_green.2.1.10.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\sqlitepclraw.core\\2.1.10\\sqlitepclraw.core.2.1.10.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\sqlitepclraw.lib.e_sqlite3\\2.1.10\\sqlitepclraw.lib.e_sqlite3.2.1.10.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\sqlitepclraw.provider.e_sqlite3\\2.1.10\\sqlitepclraw.provider.e_sqlite3.2.1.10.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\std.uritemplate\\2.0.8\\std.uritemplate.2.0.8.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\system.clientmodel\\1.8.0\\system.clientmodel.1.8.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\system.identitymodel.tokens.jwt\\8.18.0\\system.identitymodel.tokens.jwt.8.18.0.nupkg.sha512",
