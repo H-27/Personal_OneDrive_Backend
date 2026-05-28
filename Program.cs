@@ -4,16 +4,27 @@ using Microsoft.Identity.Web;
 using Microsoft.Graph;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.DataProtection;
+using StackExchange.Redis;
 
 // Initialize the web server
 var builder = WebApplication.CreateBuilder(args);
 
 // Setup persistent Redis Cache so graph tokens survive container restarts
+var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.Configuration = builder.Configuration.GetConnectionString("Redis");
+    options.Configuration = redisConnectionString;
     options.InstanceName = "TokenCache_";
 });
+
+// Configure Data Protection to use Redis so auth cookies survive container restarts
+if (!string.IsNullOrEmpty(redisConnectionString))
+{
+    var redis = ConnectionMultiplexer.Connect(redisConnectionString);
+    builder.Services.AddDataProtection()
+        .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
+}
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
