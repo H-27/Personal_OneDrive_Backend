@@ -9,7 +9,7 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Fetch and robustly format the Upstash Redis Connection
+// 1. Fetch the raw connection string directly 
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 ConfigurationOptions? redisConfig = null;
 
@@ -17,23 +17,11 @@ if (!string.IsNullOrEmpty(redisConnectionString))
 {
     try
     {
-        // If the string already contains a port (like :6379), we strip it before forcing SSL 
-        // to prevent the driver from creating a broken hybrid port string like :6379:6380
-        if (redisConnectionString.Contains(".upstash.io:"))
-        {
-            // Split by the colon before the port number
-            var parts = redisConnectionString.Split(".upstash.io:");
-            var baseUri = parts[0] + ".upstash.io";
-            
-            redisConfig = ConfigurationOptions.Parse(baseUri);
-        }
-        else
-        {
-            redisConfig = ConfigurationOptions.Parse(redisConnectionString);
-        }
-
-        redisConfig.AbortOnConnectFail = false; // Prevents boot crashing
-        redisConfig.Ssl = true;                 // Enforces explicit secure SSL port (6380)
+        // Let the library natively parse your environment string without manual modifications
+        redisConfig = ConfigurationOptions.Parse(redisConnectionString);
+        redisConfig.AbortOnConnectFail = false; 
+        
+        // Subscribe to the validation event using correct += syntax
         redisConfig.CertificateValidation += (sender, certificate, chain, errors) => true;
     }
     catch (Exception ex)
@@ -49,7 +37,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.InstanceName = "TokenCache_";
 });
 
-// 3. Configure Data Protection with a complete try-catch fallback
+// 3. Configure Data Protection with a fallback catch block
 if (redisConfig != null)
 {
     try 
@@ -60,7 +48,7 @@ if (redisConfig != null)
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[DATA PROTECTION ERROR] Redis handoff failed. Falling back to memory keys: {ex.Message}");
+        Console.WriteLine($"[DATA PROTECTION ERROR] Redis connection failed: {ex.Message}");
     }
 }
 
