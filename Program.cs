@@ -9,27 +9,33 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Fetch and robustly configure the Upstash Redis Connection
+// Fetch the connection string safely
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 ConfigurationOptions? redisConfig = null;
 
 if (!string.IsNullOrEmpty(redisConnectionString))
 {
-    redisConfig = ConfigurationOptions.Parse(redisConnectionString);
-    redisConfig.AbortOnConnectFail = false; // Prevents startup container crashes
-    redisConfig.Ssl = true;                 // Forces rediss:// secure protocol for Upstash
-    
-    // FIX: Using the correct += operator syntax for events
-    redisConfig.CertificateValidation += (sender, certificate, chain, errors) => true;
+    try
+    {
+        redisConfig = ConfigurationOptions.Parse(redisConnectionString);
+        redisConfig.AbortOnConnectFail = false; 
+        redisConfig.Ssl = true;                 
+        redisConfig.CertificateValidation += (sender, certificate, chain, errors) => true;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[CRITICAL] Redis String Parsing Failed: {ex.Message}");
+    }
 }
-// 2. Setup Distributed Token Cache using the safe SSL configuration
+
+// 1. Setup Distributed Token Cache with exception isolation
 builder.Services.AddStackExchangeRedisCache(options =>
 {
     options.ConfigurationOptions = redisConfig; 
     options.InstanceName = "TokenCache_";
 });
 
-// 3. Configure Data Protection safely
+// 2. Configure Data Protection with a complete try-catch fallback
 if (redisConfig != null)
 {
     try 
@@ -40,8 +46,9 @@ if (redisConfig != null)
     }
     catch (Exception ex)
     {
-        // Fail-safe: Logs error to Render console but allows the app to process requests
-        Console.WriteLine($"[DataProtection Redis Error] Falling back to memory: {ex.Message}");
+        // Caught! If the SSL handshake or credential check fails, it logs here 
+        // instead of throwing an app-wide 500 error page.
+        Console.WriteLine($"[DATA PROTECTION ERROR] Redis handoff failed. Falling back to memory keys: {ex.Message}");
     }
 }
 
