@@ -7,11 +7,9 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
 
-// Initialize the web server
-// Initialize the web server
 var builder = WebApplication.CreateBuilder(args);
 
-// Parse and configure the Redis connection once for everything
+// 1. Setup unified, SSL-forced Redis Configuration for Upstash
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 ConfigurationOptions? redisConfig = null;
 
@@ -22,15 +20,14 @@ if (!string.IsNullOrEmpty(redisConnectionString))
     redisConfig.Ssl = true; // Force SSL for Upstash!
 }
 
-// 1. Setup persistent Redis Cache using the corrected configuration
+// 2. Fix Distributed Cache (Token persistence) using the SSL configuration
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    // Use the parsed config object instead of the raw string if available
-    options.ConfigurationOptions = redisConfig; 
+    options.ConfigurationOptions = redisConfig;
     options.InstanceName = "TokenCache_";
 });
 
-// 2. Configure Data Protection to use the exact same Redis connection
+// 3. Fix Data Protection (Cookie persistence) using the same connection
 if (redisConfig != null)
 {
     var redis = ConnectionMultiplexer.Connect(redisConfig);
@@ -38,8 +35,6 @@ if (redisConfig != null)
         .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
 }
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
 builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
@@ -47,7 +42,6 @@ builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration,
     .AddMicrosoftGraph(builder.Configuration.GetSection("MicrosoftGraph"))
     .AddDistributedTokenCaches();
 
-// Force the session cookie to allow Cross-Origin requests
 builder.Services.Configure<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme, options =>
 {
     options.Cookie.SameSite = SameSiteMode.None;
@@ -63,22 +57,18 @@ builder.Services.AddCors(options =>
             var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
             if (builder.Environment.IsDevelopment())
             {
-                // Unrestricted in development for easier testing
                 policy.SetIsOriginAllowed(_ => true);
             }
             else
             {
-                // Strict origins in production
                 policy.WithOrigins(allowedOrigins);
             }
-            
             policy.AllowAnyMethod()
                   .AllowAnyHeader()
-                  .AllowCredentials(); // Allows cookies/auth headers to be sent
+                  .AllowCredentials();
         });
 });
 
-// Configure proxy forwarding so ASP.NET knows Caddy is providing HTTPS
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -88,6 +78,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
+// Explicitly handle Render HTTPS routing context early
 app.Use((context, next) =>
 {
     context.Request.Scheme = "https";
@@ -96,135 +87,87 @@ app.Use((context, next) =>
 
 app.UseForwardedHeaders();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
-
 app.UseHttpsRedirection();
-
-// Apply the CORS policy so your frontend can call the backend
 app.UseCors("StrictStaticSite");
 
-// Enable Cookie Policy for Cross-Origin cookies
 app.UseCookiePolicy(new CookiePolicyOptions
 {
     MinimumSameSitePolicy = SameSiteMode.None,
     Secure = CookieSecurePolicy.Always
 });
 
-// Enable authentication/authorization middleware
 app.UseAuthentication();
 app.UseAuthorization();
 
-string foldername = "TaGea2026"; // Set the folder name
+string foldername = "TaGea2026";
 
-// 1. Kicks off the Microsoft Login Sequence
+// Endpoints
 app.MapGet("/login", async (HttpContext context) =>
 {
-    // This tells .NET to challenge the user via Microsoft Identity OpenIdConnect.
-    // It automatically forces a redirect to the Microsoft Accounts sign-in page.
     await context.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme, new AuthenticationProperties
     {
-        RedirectUri = "/login-success" // Where to go AFTER a successful login
+        RedirectUri = "/login-success"
     });
 });
 
-// 2. A simple landing page showing the login worked
 app.MapGet("/login-success", (HttpContext context) =>
 {
-    return Results.Ok("Authentication successful! Your backend is now linked to OneDrive. You can close this tab and test /get-image_list.");
+    return Results.Ok("Authentication successful! Your backend is now linked to OneDrive.");
 });
 
-// Get a list of images in the folder and return it as a JSON response
 app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header (Skip in Development)
     if (!env.IsDevelopment())
     {
-        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-            extractedKey != config["CustomApiKey"])
-        {
-            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
-        }
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
+            return Results.Unauthorized();
     }
-
     try
     {
-        // 1. Get your drive ID
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
-
-        // 2. Target the children OF the specific folder path
-        // Syntax: /drives/{drive-id}/root:/{folder-name}:/children
-        var childrenResponse = await graphClient.Drives[userDriveId]
-            .Root
-            .ItemWithPath(foldername)
-            .Children
-            .GetAsync();
-
-        // 3. Extract the file names from the Value collection
-        // childrenResponse.Value contains the list of files/folders inside TaGea2026
-        var fileNames = childrenResponse?.Value?
-            .Select(item => item.Name)
-            .ToList();
-
+        var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
+        var fileNames = childrenResponse?.Value?.Select(item => item.Name).ToList();
         return Results.Ok(fileNames);
     }
-    catch (Exception ex)
-    {
-        return Results.Problem($"Failed to get OneDrive files: {ex.Message}");
-    }
-})
-.WithName("GetImageList")
-.RequireAuthorization();
+    catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
+}).RequireAuthorization();
 
-// Download all images in the folder as a zip file
 app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header (Skip in Development)
     if (!env.IsDevelopment())
     {
-        if (!context.Request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-            extractedKey != config["CustomApiKey"])
+        if (!context.Request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
         {
-            context.Response.StatusCode = 401; // Block them with a 401 Unauthorized instantly
+            context.Response.StatusCode = 401;
             return;
         }
     }
-
     try
     {
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
-
-        var childrenResponse = await graphClient.Drives[userDriveId]
-            .Root
-            .ItemWithPath(foldername)
-            .Children
-            .GetAsync();
-
+        var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
         var files = childrenResponse?.Value?.Where(i => i.Folder == null).ToList();
         if (files == null || files.Count == 0)
         {
             context.Response.StatusCode = 404;
-            await context.Response.WriteAsync("No files found to download.");
+            await context.Response.WriteAsync("No files found.");
             return;
         }
 
-        // Setup headers to start downloading instantly in the browser
         context.Response.ContentType = "application/zip";
         context.Response.Headers.Append("Content-Disposition", "attachment; filename=\"images.zip\"");
 
-        // Stream DIRECTLY to the client's browser as we fetch from Microsoft!
-        // No memory buffer, no freezing!
         using (var archive = new System.IO.Compression.ZipArchive(context.Response.Body, System.IO.Compression.ZipArchiveMode.Create))
         {
             foreach (var file in files)
             {
                 if (file.Id == null || file.Name == null) continue;
-                
                 var contentStream = await graphClient.Drives[userDriveId].Items[file.Id].Content.GetAsync();
                 if (contentStream != null)
                 {
@@ -240,141 +183,83 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
         if (!context.Response.HasStarted)
         {
             context.Response.StatusCode = 500;
-            await context.Response.WriteAsync($"Failed to download images: {ex.Message}");
+            await context.Response.WriteAsync($"Failed: {ex.Message}");
         }
     }
-})
-.WithName("DownloadAllImages")
-.RequireAuthorization();
+}).RequireAuthorization();
 
-// Upload images to the folder
 app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header (Skip in Development)
     if (!env.IsDevelopment())
     {
-        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-            extractedKey != config["CustomApiKey"])
-        {
-            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
-        }
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
+            return Results.Unauthorized();
     }
-
     try
     {
-        if (!request.HasFormContentType)
-        {
-            return Results.BadRequest("Invalid form content type. Ensure you are sending multipart/form-data.");
-        }
-
+        if (!request.HasFormContentType) return Results.BadRequest("Invalid form content.");
         var form = await request.ReadFormAsync();
         var files = form.Files;
-
-        if (files.Count == 0)
-        {
-            return Results.BadRequest("No files were uploaded.");
-        }
+        if (files.Count == 0) return Results.BadRequest("No files uploaded.");
 
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
-
         var uploadedFiles = new List<string>();
 
         foreach (var file in files)
         {
             if (string.IsNullOrEmpty(file.FileName)) continue;
-
             using var stream = file.OpenReadStream();
             
-            // Files over 4MB require an upload session in Microsoft Graph.
-            // Using CreateUploadSession handles files of any size safely.
             var uploadSessionRequestBody = new Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession.CreateUploadSessionPostRequestBody
             {
                 Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
                 {
-                    AdditionalData = new Dictionary<string, object>
-                    {
-                        { "@microsoft.graph.conflictBehavior", "replace" }
-                    }
+                    AdditionalData = new Dictionary<string, object> { { "@microsoft.graph.conflictBehavior", "replace" } }
                 }
             };
 
-            var uploadSession = await graphClient.Drives[userDriveId]
-                .Root
-                .ItemWithPath($"{foldername}/{file.FileName}")
-                .CreateUploadSession
-                .PostAsync(uploadSessionRequestBody);
-
-            int maxSliceSize = 320 * 1024; // 320 KB slices
+            var uploadSession = await graphClient.Drives[userDriveId].Root.ItemWithPath($"{foldername}/{file.FileName}").CreateUploadSession.PostAsync(uploadSessionRequestBody);
+            
+            // Optimization: Bump slice size to 1.25MB (Must be a multiple of 320KB) to dramatically speed up upload times
+            int maxSliceSize = 4 * 320 * 1024; 
             var fileUploadTask = new Microsoft.Graph.LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(uploadSession, stream, maxSliceSize, graphClient.RequestAdapter);
-
             await fileUploadTask.UploadAsync();
                 
             uploadedFiles.Add(file.FileName);
         }
-
         return Results.Ok(new { Message = "Files uploaded successfully", Files = uploadedFiles });
     }
-    catch (Exception ex)
-    {
-        return Results.Problem($"Failed to upload images: {ex.Message}");
-    }
-}).WithName("UploadImages")
-.RequireAuthorization();
+    catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
+}).WithName("UploadImages").RequireAuthorization();
 
-// Get n random images from the folder for display on the homepage
 app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
 {
-    // 1. Check if the request contains our custom secret header (Skip in Development)
     if (!env.IsDevelopment())
     {
-        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || 
-            extractedKey != config["CustomApiKey"])
-        {
-            return Results.Unauthorized(); // Block them with a 401 Unauthorized instantly
-        }
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
+            return Results.Unauthorized();
     }
-
     try
     {
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
-
-        var childrenResponse = await graphClient.Drives[userDriveId]
-            .Root
-            .ItemWithPath(foldername)
-            .Children
-            .GetAsync();
-
-        var files = childrenResponse?.Value?
-            .Where(i => i.Folder == null && i.Name != null)
-            .ToList();
-
-        if (files == null || files.Count == 0)
-        {
-            return Results.Ok(new List<object>());
-        }
+        var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
+        var files = childrenResponse?.Value?.Where(i => i.Folder == null && i.Name != null).ToList();
+        if (files == null || files.Count == 0) return Results.Ok(new List<object>());
 
         var random = new Random();
         var randomImages = files.OrderBy(x => random.Next()).Take(count).Select(i => new 
         { 
             Name = i.Name, 
             Id = i.Id,
-            // Grab the raw file download URL instead of the OneDrive viewer wrapper page
             DownloadUrl = i.AdditionalData != null && i.AdditionalData.ContainsKey("@microsoft.graph.downloadUrl")
                 ? i.AdditionalData["@microsoft.graph.downloadUrl"]?.ToString() 
                 : i.WebUrl
         }).ToList();
-
         return Results.Ok(randomImages);
     }
-    catch (Exception ex)
-    {
-        return Results.Problem($"Failed to get homepage images: {ex.Message}");
-    }
-}).WithName("GetHomepageImages")
-.RequireAuthorization();
+    catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
+}).RequireAuthorization();
 
 app.Run();
-
-// dotnet user-secrets set "OneDriveApiKey"
