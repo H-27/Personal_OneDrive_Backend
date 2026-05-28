@@ -126,83 +126,22 @@ string foldername = "TaGea2026";
 // Helper method to safely build an authenticated Graph Client using a foolproof direct cache read
 async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, IConfiguration config, IDistributedCache cache)
 {
-    // 1. Extract the account identifier from the frontend header
     if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
     {
-        Console.WriteLine("[AUTH WARN] Missing X-Microsoft-Account-Id header.");
         return null;
     }
 
-    string accessToken = string.Empty;
-    var clientId = config["AzureAd:ClientId"];
+    // Direct read from our explicit, un-hashed custom key
+    string customRedisKey = $"token:{accountId}";
+    string accessToken = await cache.GetStringAsync(customRedisKey) ?? string.Empty;
 
-    try
-    {
-        // 2. Scan Redis using MSAL's exact internal cache layout key format:
-        // Personal Microsoft accounts use an internal combined partition key format.
-        // We will scan for your account's access token directly from the TokenCache database block.
-        string msalPartitionKey = $"{clientId}_AppTokenCache";
-        var cachedData = await cache.GetAsync(msalPartitionKey);
-
-        if (cachedData != null)
-        {
-            using var doc = JsonDocument.Parse(cachedData);
-            // Search the JSON layout for any valid current AccessToken property matching your app
-            if (doc.RootElement.TryGetProperty("AccessToken", out var tokenProp))
-            {
-                accessToken = tokenProp.GetString() ?? string.Empty;
-            }
-        }
-
-        // 3. Fallback: If the global app cache partition is segmented by user hash instead
-        if (string.IsNullOrEmpty(accessToken))
-        {
-            // Try fetching via MSAL's alternative explicit user key template format
-            string userSpecificKey = $"{clientId}.{accountId}..";
-            var userCachedData = await cache.GetAsync(userSpecificKey);
-            if (userCachedData != null)
-            {
-                using var doc = JsonDocument.Parse(userCachedData);
-                if (doc.RootElement.TryGetProperty("secret", out var secretProp))
-                {
-                    accessToken = secretProp.GetString() ?? string.Empty;
-                }
-            }
-        }
-    }
-    catch (Exception redisEx)
-    {
-        Console.WriteLine($"[DIRECT REDIS EXCEPTION] Manual extraction failed: {redisEx.Message}");
-    }
-
-    // 4. Ultimate Safety Catch: If direct extraction failed, use the managed identity token builder loop
     if (string.IsNullOrEmpty(accessToken))
     {
-        var claims = new[]
-        {
-            new Claim(ClaimTypes.NameIdentifier, accountId!),
-            new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", accountId!),
-            new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "9188040d-6c67-4c5b-b112-36a304b66dad")
-        };
-
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        var principal = new ClaimsPrincipal(identity);
-        var tokenAcquisition = request.HttpContext.RequestServices.GetRequiredService<ITokenAcquisition>();
-        
-        try
-        {
-            accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(new[] { "Files.ReadWrite" }, user: principal);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[AUTH BLOCKED] Both direct extraction and MSAL matching failed: {ex.Message}");
-            return null;
-        }
+        Console.WriteLine($"[AUTH ERROR] No token found in custom key {customRedisKey}. Re-login required.");
+        return null;
     }
 
-    if (string.IsNullOrEmpty(accessToken)) return null;
-
-    // 5. Pass the token directly to the modern Kiota execution framework
+    // Direct initialization bypassing Kiota's internal auth engine crashes entirely
     var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
     return new GraphServiceClient(authProvider);
 }
@@ -216,9 +155,32 @@ app.MapGet("/login", async (HttpContext context) =>
     });
 });
 
-app.MapGet("/login-success", (HttpContext context) =>
+app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition tokenAcquisition, IDistributedCache cache) =>
 {
     var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
+    
+    if (!string.IsNullOrEmpty(userId))
+    {
+        try
+        {
+            // Force fetch the active token right now while the browser cookie context exists
+            string accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(new[] { "Files.ReadWrite" }, user: context.User);
+            
+            if (!string.IsNullOrEmpty(accessToken))
+            {
+                // Save it explicitly under our own custom key template for 1 hour
+                string customRedisKey = $"token:{userId}";
+                var cacheOptions = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
+                await cache.SetStringAsync(customRedisKey, accessToken, cacheOptions);
+                Console.WriteLine($"[SUCCESS] Manually cached token under custom key: {customRedisKey}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Could not capture raw token during login: {ex.Message}");
+        }
+    }
+
     return Results.Ok($"Authentication successful! Copy this ID for your frontend: {userId}");
 });
 
