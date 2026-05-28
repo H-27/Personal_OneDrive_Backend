@@ -6,6 +6,9 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
+using System.Security.Claims;
+using Microsoft.Kiota.Abstractions;
+using Microsoft.Kiota.Abstractions.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,7 +20,6 @@ if (!string.IsNullOrEmpty(redisConnectionString))
 {
     try
     {
-        // Let the library natively parse your environment string without manual modifications
         redisConfig = ConfigurationOptions.Parse(redisConnectionString);
     }
     catch (Exception ex)
@@ -77,10 +79,9 @@ builder.Services.AddCors(options =>
             }
             else
             {
-                // FIXED: Explicit custom header allowance for live mobile environments
                 policy.WithOrigins(allowedOrigins)
                       .AllowAnyMethod()
-                      .WithHeaders("X-Custom-Auth-Key", "Content-Type", "Accept", "Authorization");
+                      .WithHeaders("X-Custom-Auth-Key", "X-Microsoft-Account-Id", "Content-Type", "Accept", "Authorization");
             }
         });
 });
@@ -120,6 +121,34 @@ app.UseAuthorization();
 
 string foldername = "TaGea2026";
 
+// Helper method to safely build a cookie-free authenticated Graph Client using the custom account header identifier
+async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, ITokenAcquisition tokenAcquisition)
+{
+    if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
+    {
+        return null;
+    }
+
+    // Synthesize a minimal ClaimsPrincipal identity matching the structure MSAL uses inside Redis key mapping
+    var identity = new ClaimsIdentity(new[]
+    {
+        new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", accountId!),
+        new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "9188040d-6c67-4c5b-b112-36a304b66dad") // Common personal account tenant fallback
+    }, CookieAuthenticationDefaults.AuthenticationScheme);
+
+    var principal = new ClaimsPrincipal(identity);
+    var scopes = new[] { "Files.ReadWrite" };
+
+    // Fetch the token manually out of Redis via the synthesized user principal profile context
+    string accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(scopes, user: principal);
+
+    // Using the fundamental BaseBearerTokenAuthenticationProvider to guarantee clean compilation
+    var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
+    
+    // Instantiates the Graph service execution workspace
+    return new GraphServiceClient(authProvider);
+}
+
 // Endpoints
 app.MapGet("/login", async (HttpContext context) =>
 {
@@ -131,13 +160,11 @@ app.MapGet("/login", async (HttpContext context) =>
 
 app.MapGet("/login-success", (HttpContext context) =>
 {
-    // This will print your unique personal user ID string to the console/logs
     var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
-    Console.WriteLine($"YOUR ACCOUNT ID IS: {userId}");
     return Results.Ok($"Authentication successful! Copy this ID for your frontend: {userId}");
 });
 
-app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
+app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -146,16 +173,18 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
     }
     try
     {
-        var driveItem = await graphClient.Me.Drive.GetAsync();
-        var userDriveId = driveItem?.Id;
-        var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, tokenAcquisition);
+        if (graphClient == null) return Results.BadRequest("Missing or invalid background authentication data.");
+
+        var drive = await graphClient.Drives["root"].GetAsync();
+        var childrenResponse = await graphClient.Drives[drive.Id].Root.ItemWithPath(foldername).Children.GetAsync();
         var fileNames = childrenResponse?.Value?.Select(item => item.Name).ToList();
         return Results.Ok(fileNames);
     }
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
 });
 
-app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
+app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -167,8 +196,11 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
     }
     try
     {
-        var driveItem = await graphClient.Me.Drive.GetAsync();
-        var userDriveId = driveItem?.Id;
+        var graphClient = await GetAuthenticatedGraphClientAsync(context.Request, tokenAcquisition);
+        if (graphClient == null) { context.Response.StatusCode = 400; return; }
+
+        var drive = await graphClient.Drives["root"].GetAsync();
+        var userDriveId = drive?.Id;
         var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
         var files = childrenResponse?.Value?.Where(i => i.Folder == null).ToList();
         if (files == null || files.Count == 0)
@@ -206,7 +238,7 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
     }
 });
 
-app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
+app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -220,8 +252,11 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         var files = form.Files;
         if (files.Count == 0) return Results.BadRequest("No files uploaded.");
 
-        var driveItem = await graphClient.Me.Drive.GetAsync();
-        var userDriveId = driveItem?.Id;
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, tokenAcquisition);
+        if (graphClient == null) return Results.BadRequest("Invalid authentication initialization data.");
+
+        var drive = await graphClient.Drives["root"].GetAsync();
+        var userDriveId = drive?.Id;
         var uploadedFiles = new List<string>();
 
         foreach (var file in files)
@@ -250,7 +285,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
     catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
 }).WithName("UploadImages");
 
-app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, GraphServiceClient graphClient, IWebHostEnvironment env) =>
+app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, ITokenAcquisition tokenAcquisition, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -259,8 +294,11 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
     }
     try
     {
-        var driveItem = await graphClient.Me.Drive.GetAsync();
-        var userDriveId = driveItem?.Id;
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, tokenAcquisition);
+        if (graphClient == null) return Results.BadRequest("Invalid initialization metadata.");
+
+        var drive = await graphClient.Drives["root"].GetAsync();
+        var userDriveId = drive?.Id;
         var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
         var files = childrenResponse?.Value?.Where(i => i.Folder == null && i.Name != null).ToList();
         if (files == null || files.Count == 0) return Results.Ok(new List<object>());
@@ -280,3 +318,12 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
 });
 
 app.Run();
+
+// A tiny, fully compliant native token supplier for modern Microsoft Kiota runtimes
+public class InMemoryTokenProvider : IAccessTokenProvider
+{
+    private readonly string _token;
+    public InMemoryTokenProvider(string token) => _token = token;
+    public Task<string> GetAuthorizationTokenAsync(Uri uri, Dictionary<string, object>? additionalContext = null, CancellationToken cancellationToken = default) => Task.FromResult(_token);
+    public AllowedHostsValidator AllowedHostsValidator { get; } = new();
+}

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>home</title>
+    <style>
+        /* Modern mobile viewports require containment at the root level to prevent clipping */
+        html {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: hidden; /* Stops horizontal shaking */
+        }
+        
+        body { 
+            margin: 0; 
+            padding: 0; 
+            background-color: white; 
+            width: 100%;
+            max-width: 100%;
+            overflow-x: hidden; /* Stops horizontal shaking */
+        }
+        
+        /* Opaque solid mask that completely hides the gallery underneath */
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 9999;
+            border: none;
+            background: white; 
+            transition: opacity 0.5s ease, visibility 0.5s;
+        }
+        #loadingOverlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        /* Hover effects for interactive image components */
+        .back-link, #uploadBtn, #downloadBtn {
+            transition: transform 0.3s ease, filter 0.3s ease;
+            cursor: pointer;
+        }
+        .back-link:hover, #uploadBtn:hover, #downloadBtn:hover {
+            transform: scale(1.04);
+            filter: drop-shadow(0px 10px 25px rgba(0,0,0,0.25));
+        }
+        /* Active press effect for buttons */
+        #uploadBtn:active, #downloadBtn:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body>
+
+    <iframe id="loadingOverlay" src="loading.html"></iframe>
+
+    <div id="scaleWrapper" style="transform-origin: top left; width: 1920px; overflow: visible; position: relative;">
+
+        <div style="width: 1920px; height: 4113px; position: relative; background: white; overflow: hidden">
+            <div style="width: 1011.98px; height: 4376.05px; left: -46.48px; top: -92.02px; position: absolute; background: linear-gradient(90deg, #3A7065 35%, #A9A73E 100%)"></div>
+            <div style="width: 1011.98px; height: 4376.05px; left: 1966.48px; top: 4284.02px; position: absolute; transform: rotate(180deg); transform-origin: top left; background: linear-gradient(90deg, #3A7065 35%, #A9A73E 100%)"></div>
+            <img style="width: 1338.57px; height: 246.48px; left: 273.71px; top: 102.52px; position: absolute" src="assets/images/Komponente_7.png" />
+            <img style="width: 250px; height: auto; left: 835px; top: 377px; position: absolute" src="assets/images/2026.png" />
+            
+            <div id="uploadBtn" style="width: 905px; height: 326px; left: 508px; top: 609px; position: absolute; background: #D83C08; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16), 0px 3px 6px rgba(0, 0, 0, 0.16) inset; border-radius: 88px; border: 1px white solid; display: flex; align-items: center; justify-content: center;">
+                <img style="width: 529px; height: 203px" src="assets/images/Bilder%20Hochladen.png" />
+            </div>
+
+            <input type="file" id="fileUploadInput" multiple accept="image/*" style="display: none;" />
+
+            <div id="downloadBtn" style="width: 905px; height: 326px; left: 124px; top: 3641px; position: absolute; background: #D83C08; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16), 0px 3px 6px rgba(0, 0, 0, 0.16) inset; border-radius: 88px; border: 1px white solid; display: flex; align-items: center; justify-content: center;">
+                <img style="width: 625px; height: 202px" src="assets/images/Ordnerherunterladen.png" />
+            </div>
+
+            <img class="gallery-img" style="width: 975px; height: 653px; left: 53.66px; top: 1296.02px; position: absolute; transform: rotate(-11deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 975px; height: 653px; left: 103.66px; top: 2405.79px; position: absolute; transform: rotate(-11deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 664.42px; height: 444.99px; left: 547.57px; top: 2633.27px; position: absolute; transform: rotate(86deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 664.42px; height: 444.99px; left: 770.08px; top: 2996.98px; position: absolute; transform: rotate(-9deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 975px; height: 653px; left: 920.66px; top: 2182.71px; position: absolute; transform: rotate(9deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 667.21px; height: 446.86px; left: 1101.49px; top: 1488.58px; position: absolute; transform: rotate(101deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 667.21px; height: 446.86px; left: 1616.98px; top: 1061.36px; position: absolute; transform: rotate(75deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 680px; height: 456px; left: 1736.56px; top: 2234.53px; position: absolute; transform: rotate(-174deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            <img class="gallery-img" style="width: 680px; height: 456px; left: 984.17px; top: 2271.33px; position: absolute; transform: rotate(164deg); transform-origin: top left; background: #eee; box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.16); border: 1px #707070 solid; object-fit: cover;" />
+            
+            <a href="index.html" style="position: absolute; left: 1262px; top: 3539px; display: block; width: 485px; height: 491px; z-index: 10;" class="back-link">
+                <img style="width: 100%; height: 100%;" src="assets/images/Komponente_8.png" alt="Back to Index" />
+            </a>
+        </div>
+
+    </div>
+
+    <script>
+        const API_BASE_URL = 'https://personal-onedrive-backend.onrender.com';
+        const CUSTOM_API_KEY = 'OV52i_5c3k2ocNbm9oGkeg';
+        const MS_ACCOUNT_ID = '00000000-0000-0000-312a-04c9a0d7253b';
+
+        const uploadBtn = document.getElementById('uploadBtn');
+        const fileUploadInput = document.getElementById('fileUploadInput');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        uploadBtn.addEventListener('click', () => { fileUploadInput.click(); });
+
+        // Handle Image Upload
+        fileUploadInput.addEventListener('change', async (event) => {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+
+            if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) { formData.append('files', files[i]); }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/upload-images?cb=${new Date().getTime()}`, {
+                    method: 'POST',
+                    headers: { 
+                        'X-Custom-Auth-Key': CUSTOM_API_KEY,
+                        'X-Microsoft-Account-Id': MS_ACCOUNT_ID
+                    },
+                    body: formData
+                });
+                if (!response.ok) throw new Error('Upload failed');
+                alert("Upload successful!");
+                await loadRandomImages(); 
+            } catch (error) {
+                alert('Upload failed.');
+                if (loadingOverlay) loadingOverlay.classList.add('hidden'); 
+            } finally { 
+                fileUploadInput.value = ''; 
+            }
+        });
+
+        // Handle ZIP Generation and Download
+        downloadBtn.addEventListener('click', async () => {
+            if (loadingOverlay) {
+                loadingOverlay.classList.remove('hidden');
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/download-all-images?cb=${new Date().getTime()}`, {
+                    method: 'GET',
+                    headers: { 
+                        'X-Custom-Auth-Key': CUSTOM_API_KEY,
+                        'X-Microsoft-Account-Id': MS_ACCOUNT_ID
+                    }
+                });
+                if (!response.ok) throw new Error('Download failed');
+                
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = 'images.zip';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+            } catch (error) {
+                alert('Download failed.');
+            } finally {
+                if (loadingOverlay) {
+                    loadingOverlay.classList.add('hidden');
+                }
+            }
+        });
+
+        // Fetch Gallery Images from C# Backend
+        async function loadRandomImages() {
+            const galleryImages = document.querySelectorAll('.gallery-img');
+            let imagesLoadedSuccessfully = false;
+
+            try {
+                if (galleryImages.length === 0) return;
+                const count = galleryImages.length;
+                
+                const response = await fetch(`${API_BASE_URL}/get-homepage-images/${count}?cb=${new Date().getTime()}`, {
+                    method: 'GET',
+                    headers: { 
+                        'X-Custom-Auth-Key': CUSTOM_API_KEY,
+                        'X-Microsoft-Account-Id': MS_ACCOUNT_ID
+                    }
+                });
+
+                if (!response.ok) throw new Error('Failed to fetch images');
+                const imagesData = await response.json(); 
+                
+                if (!imagesData || imagesData.length === 0) return;
+
+                for (let i = 0; i < imagesData.length && i < galleryImages.length; i++) {
+                    const url = imagesData[i].downloadUrl || imagesData[i].DownloadUrl;
+                    if (url) {
+                        galleryImages[i].src = url;
+                    }
+                }
+                imagesLoadedSuccessfully = true;
+            } catch (error) {
+                console.error("Gallery Error:", error.message);
+            } finally {
+                console.log("Dropping loading curtain. Status success:", imagesLoadedSuccessfully);
+                if (loadingOverlay) { 
+                    loadingOverlay.classList.add('hidden'); 
+                }
+            }
+        }
+
+        // Dynamic scaling script for the long gallery canvas
+        function autoScaleHome() {
+            const wrapper = document.getElementById('scaleWrapper');
+            const scaleRatio = window.innerWidth / 1920;
+            
+            wrapper.style.transform = `scale(${scaleRatio})`;
+            
+            const calculatedHeight = 4113 * scaleRatio;
+            wrapper.style.height = `${calculatedHeight}px`;
+            document.body.style.height = `${calculatedHeight}px`;
+        }
+
+        window.addEventListener('load', autoScaleHome);
+        window.addEventListener('resize', autoScaleHome);
+        
+        autoScaleHome();
+        loadRandomImages();
+    </script>
+</body>
+</html>
