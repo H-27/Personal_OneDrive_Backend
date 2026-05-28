@@ -9,28 +9,20 @@ using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Setup unified, SSL-forced Redis Configuration for Upstash
+// Fetch the working connection string directly
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
-ConfigurationOptions? redisConfig = null;
 
-if (!string.IsNullOrEmpty(redisConnectionString))
-{
-    redisConfig = ConfigurationOptions.Parse(redisConnectionString);
-    redisConfig.AbortOnConnectFail = false;
-    redisConfig.Ssl = true; // Force SSL for Upstash!
-}
-
-// 2. Fix Distributed Cache (Token persistence) using the SSL configuration
+// 1. Setup Token Cache using the working raw string
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.ConfigurationOptions = redisConfig;
+    options.Configuration = redisConnectionString; 
     options.InstanceName = "TokenCache_";
 });
 
-// 3. Fix Data Protection (Cookie persistence) using the same connection
-if (redisConfig != null)
+// 2. Configure Data Protection using the exact same raw string format
+if (!string.IsNullOrEmpty(redisConnectionString))
 {
-    var redis = ConnectionMultiplexer.Connect(redisConfig);
+    var redis = ConnectionMultiplexer.Connect(redisConnectionString);
     builder.Services.AddDataProtection()
         .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
 }
