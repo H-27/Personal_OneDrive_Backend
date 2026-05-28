@@ -4,7 +4,6 @@ using Microsoft.Identity.Web;
 using Microsoft.Graph;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
-using NeoSmart.Caching.Sqlite;
 
 // Initialize the web server
 var builder = WebApplication.CreateBuilder(args);

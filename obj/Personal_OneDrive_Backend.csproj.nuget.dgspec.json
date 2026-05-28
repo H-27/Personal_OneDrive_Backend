@@ -50,6 +50,10 @@
               "target": "Package",
               "version": "[10.0.8, )"
             },
+            "Microsoft.Extensions.Caching.StackExchangeRedis": {
+              "target": "Package",
+              "version": "[10.0.8, )"
+            },
             "Microsoft.Graph": {
               "target": "Package",
               "version": "[6.1.0, )"
@@ -65,10 +69,6 @@
             "Microsoft.Identity.Web.GraphServiceClient": {
               "target": "Package",
               "version": "[4.10.0, )"
-            },
-            "NeoSmart.Caching.Sqlite.AspNetCore": {
-              "target": "Package",
-              "version": "[9.0.1, )"
             }
           },
           "imports": [
