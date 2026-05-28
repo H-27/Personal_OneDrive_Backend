@@ -8,24 +8,32 @@ using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
 
 // Initialize the web server
+// Initialize the web server
 var builder = WebApplication.CreateBuilder(args);
 
-// Setup persistent Redis Cache so graph tokens survive container restarts
+// Parse and configure the Redis connection once for everything
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+ConfigurationOptions? redisConfig = null;
+
+if (!string.IsNullOrEmpty(redisConnectionString))
+{
+    redisConfig = ConfigurationOptions.Parse(redisConnectionString);
+    redisConfig.AbortOnConnectFail = false;
+    redisConfig.Ssl = true; // Force SSL for Upstash!
+}
+
+// 1. Setup persistent Redis Cache using the corrected configuration
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.Configuration = redisConnectionString;
+    // Use the parsed config object instead of the raw string if available
+    options.ConfigurationOptions = redisConfig; 
     options.InstanceName = "TokenCache_";
 });
 
-// Configure Data Protection to use Redis so auth cookies survive container restarts
-if (!string.IsNullOrEmpty(redisConnectionString))
+// 2. Configure Data Protection to use the exact same Redis connection
+if (redisConfig != null)
 {
-    var config = ConfigurationOptions.Parse(redisConnectionString);
-    config.AbortOnConnectFail = false;
-    config.Ssl = true; // Force SSL for Upstash!
-    
-    var redis = ConnectionMultiplexer.Connect(config);
+    var redis = ConnectionMultiplexer.Connect(redisConfig);
     builder.Services.AddDataProtection()
         .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
 }
