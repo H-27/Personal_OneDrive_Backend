@@ -271,7 +271,8 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
         { 
             Name = i.Name, 
             Id = i.Id,
-            DownloadUrl = i.AdditionalData != null && i.AdditionalData.TryGetValue("@microsoft.graph.downloadUrl", out var url) ? url : null
+            // WebUrl provides the permanent, non-expiring link to view the file on OneDrive
+            DownloadUrl = i.WebUrl 
         }).ToList();
 
         return Results.Ok(randomImages);
