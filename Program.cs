@@ -11,18 +11,27 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Fetch the working connection string directly
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+ConfigurationOptions? redisConfig = null;
 
-// 1. Setup Token Cache using the working raw string
+if (!string.IsNullOrEmpty(redisConnectionString))
+{
+    // Parse the raw string that works, but inject the crash protection setting
+    redisConfig = ConfigurationOptions.Parse(redisConnectionString);
+    redisConfig.AbortOnConnectFail = false; 
+}
+
+// 1. Setup Token Cache using the crash-protected configuration
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.Configuration = redisConnectionString; 
+    options.ConfigurationOptions = redisConfig; 
     options.InstanceName = "TokenCache_";
 });
 
-// 2. Configure Data Protection using the exact same raw string format
-if (!string.IsNullOrEmpty(redisConnectionString))
+// 2. Configure Data Protection safely without boot crashing
+if (redisConfig != null)
 {
-    var redis = ConnectionMultiplexer.Connect(redisConnectionString);
+    // Passing redisConfig with AbortOnConnectFail = false stops the status 139 boot crash!
+    var redis = ConnectionMultiplexer.Connect(redisConfig); 
     builder.Services.AddDataProtection()
         .PersistKeysToStackExchangeRedis(redis, "DataProtection-Keys");
 }
