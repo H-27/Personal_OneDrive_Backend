@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "hnHSVmwRw74=",
+  "dgSpecHash": "60PVl1JDS0g=",
   "success": true,
   "projectFilePath": "C:\\Users\\Work\\VSCodeProjects\\Personal_OneDrive_Backend\\Personal_OneDrive_Backend.csproj",
   "expectedPackageFiles": [
@@ -10,6 +10,7 @@
     "C:\\Users\\Work\\.nuget\\packages\\azure.security.keyvault.secrets\\4.6.0\\azure.security.keyvault.secrets.4.6.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.authentication.jwtbearer\\10.0.0\\microsoft.aspnetcore.authentication.jwtbearer.10.0.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.authentication.openidconnect\\10.0.0\\microsoft.aspnetcore.authentication.openidconnect.10.0.0.nupkg.sha512",
+    "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.dataprotection.stackexchangeredis\\10.0.8\\microsoft.aspnetcore.dataprotection.stackexchangeredis.10.0.8.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.aspnetcore.openapi\\10.0.8\\microsoft.aspnetcore.openapi.10.0.8.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.bcl.asyncinterfaces\\8.0.0\\microsoft.bcl.asyncinterfaces.8.0.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\microsoft.extensions.caching.stackexchangeredis\\10.0.8\\microsoft.extensions.caching.stackexchangeredis.10.0.8.nupkg.sha512",
