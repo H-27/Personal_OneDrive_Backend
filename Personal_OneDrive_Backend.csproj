@@ -13,6 +13,7 @@
     <PackageReference Include="Microsoft.Identity.Client" Version="4.84.1" />
     <PackageReference Include="Microsoft.Identity.Web" Version="4.10.0" />
     <PackageReference Include="Microsoft.Identity.Web.GraphServiceClient" Version="4.10.0" />
+    <PackageReference Include="NeoSmart.Caching.Sqlite.AspNetCore" Version="9.0.1" />
   </ItemGroup>
 
 </Project>

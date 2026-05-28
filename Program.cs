@@ -3,9 +3,19 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Identity.Web;
 using Microsoft.Graph;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using NeoSmart.Caching.Sqlite;
 
 // Initialize the web server
 var builder = WebApplication.CreateBuilder(args);
+
+// Setup persistent SQLite Cache so graph tokens survive container restarts
+string cacheDir = Path.Combine(builder.Environment.ContentRootPath, "cache");
+if (!Directory.Exists(cacheDir)) {
+    Directory.CreateDirectory(cacheDir);
+}
+builder.Services.AddSqliteCache(options => {
+    options.CachePath = Path.Combine(cacheDir, "token_cache.db");
+});
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
@@ -14,7 +24,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
     .EnableTokenAcquisitionToCallDownstreamApi(new string[] { "Files.ReadWrite", "offline_access" })
     .AddMicrosoftGraph(builder.Configuration.GetSection("MicrosoftGraph"))
-    .AddInMemoryTokenCaches();
+    .AddDistributedTokenCaches();
 
 // Force the session cookie to allow Cross-Origin requests
 builder.Services.Configure<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme, options =>
@@ -28,10 +38,23 @@ builder.Services.AddAuthorization();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("StrictStaticSite",
-        policy => policy.SetIsOriginAllowed(_ => true) // Allows any origin
-                        .AllowAnyMethod()
-                        .AllowAnyHeader()
-                        .AllowCredentials()); // Allows cookies/auth headers to be sent
+        policy => {
+            var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+            if (builder.Environment.IsDevelopment())
+            {
+                // Unrestricted in development for easier testing
+                policy.SetIsOriginAllowed(_ => true);
+            }
+            else
+            {
+                // Strict origins in production
+                policy.WithOrigins(allowedOrigins);
+            }
+            
+            policy.AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials(); // Allows cookies/auth headers to be sent
+        });
 });
 
 var app = builder.Build();
