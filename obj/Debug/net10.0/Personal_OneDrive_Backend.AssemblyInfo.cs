@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Personal_OneDrive_Backend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ec6e96738eecdbff568ede1f8b88886a85a7f36f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+832de480cea84c35ca93044db8f08157da5519cf")]
 [assembly: System.Reflection.AssemblyProductAttribute("Personal_OneDrive_Backend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Personal_OneDrive_Backend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

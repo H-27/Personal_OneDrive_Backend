@@ -7,7 +7,6 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Graph;
 using Microsoft.Identity.Web;
 using StackExchange.Redis;
-using System.Security.Claims;
 using Microsoft.Kiota.Abstractions.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -191,7 +190,6 @@ app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition token
         }
     }
 
-    // IMPORTANT: frontend must use this userId as X-Microsoft-Account-Id
     return Results.Json(new
     {
         userId,
@@ -219,8 +217,9 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Missing or invalid background authentication data.");
 
-        var drive = await graphClient.Drives["root"].GetAsync();
-        var userDriveId = drive?.Id;
+        // Use Me.Drive (personal OneDrive-safe)
+        var driveItem = await graphClient.Me.Drive.GetAsync();
+        var userDriveId = driveItem?.Id;
 
         // Resolve folder safely
         var folder = await graphClient.Drives[userDriveId]
@@ -268,8 +267,8 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
             return;
         }
 
-        var drive = await graphClient.Drives["root"].GetAsync();
-        var userDriveId = drive?.Id;
+        var driveItem = await graphClient.Me.Drive.GetAsync();
+        var userDriveId = driveItem?.Id;
 
         // Resolve folder safely
         var folder = await graphClient.Drives[userDriveId]
@@ -346,8 +345,8 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Invalid authentication initialization data.");
 
-        var drive = await graphClient.Drives["root"].GetAsync();
-        var userDriveId = drive?.Id;
+        var driveItem = await graphClient.Me.Drive.GetAsync();
+        var userDriveId = driveItem?.Id;
         var uploadedFiles = new List<string>();
 
         foreach (var file in files)
@@ -402,8 +401,8 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Invalid initialization metadata.");
 
-        var drive = await graphClient.Drives["root"].GetAsync();
-        var userDriveId = drive?.Id;
+        var driveItem = await graphClient.Me.Drive.GetAsync();
+        var userDriveId = driveItem?.Id;
 
         // Resolve folder safely
         var folder = await graphClient.Drives[userDriveId]
