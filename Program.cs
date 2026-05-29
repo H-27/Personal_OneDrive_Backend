@@ -348,6 +348,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         if (graphClient == null)
             return Results.BadRequest("Invalid authentication initialization data.");
 
+        // Personal OneDrive root
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
         var uploadedFiles = new List<string>();
@@ -358,29 +359,15 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
 
             using var stream = file.OpenReadStream();
 
-            var uploadSessionRequestBody = new Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession.CreateUploadSessionPostRequestBody
-            {
-                Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
-                {
-                    AdditionalData = new Dictionary<string, object>
-                    {
-                        { "@microsoft.graph.conflictBehavior", "replace" }
-                    }
-                }
-            };
-
-            var uploadSession = await graphClient.Drives[userDriveId]
+            // Simple upload: PUT /drives/{id}/root:/{foldername}/{filename}:/content
+            var uploaded = await graphClient.Drives[userDriveId]
                 .Root
                 .ItemWithPath($"{foldername}/{file.FileName}")
-                .CreateUploadSession
-                .PostAsync(uploadSessionRequestBody);
+                .Content
+                .PutAsync(stream);
 
-            var maxSliceSize = 4 * 320 * 1024;
-            var fileUploadTask = new Microsoft.Graph.LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(
-                uploadSession, stream, maxSliceSize, graphClient.RequestAdapter);
-
-            await fileUploadTask.UploadAsync();
-            uploadedFiles.Add(file.FileName);
+            if (uploaded != null)
+                uploadedFiles.Add(file.FileName);
         }
 
         return Results.Ok(new { Message = "Files uploaded successfully", Files = uploadedFiles });
