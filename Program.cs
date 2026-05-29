@@ -336,14 +336,17 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
 
     try
     {
-        if (!request.HasFormContentType) return Results.BadRequest("Invalid form content.");
+        if (!request.HasFormContentType)
+            return Results.BadRequest("Invalid form content.");
 
         var form = await request.ReadFormAsync();
         var files = form.Files;
-        if (files.Count == 0) return Results.BadRequest("No files uploaded.");
+        if (files.Count == 0)
+            return Results.BadRequest("No files uploaded.");
 
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
-        if (graphClient == null) return Results.BadRequest("Invalid authentication initialization data.");
+        if (graphClient == null)
+            return Results.BadRequest("Invalid authentication initialization data.");
 
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
@@ -384,9 +387,11 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
     }
     catch (Exception ex)
     {
-        return Results.Problem($"Failed: {ex.Message}");
+        Console.WriteLine($"[UPLOAD ERROR] {ex}");
+        return Results.Problem($"Upload failed: {ex.Message}");
     }
 }).WithName("UploadImages");
+
 
 app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
 {
