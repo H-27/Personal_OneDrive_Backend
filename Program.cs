@@ -1,45 +1,45 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.Identity.Web;
-using Microsoft.Graph;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Graph;
+using Microsoft.Identity.Web;
 using StackExchange.Redis;
 using System.Security.Claims;
 using Microsoft.Kiota.Abstractions.Authentication;
-using Microsoft.Extensions.Caching.Distributed;
-using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Fetch the raw connection string directly 
 var redisConnectionString = builder.Configuration.GetConnectionString("Redis");
 ConfigurationOptions? redisConfig = null;
+var useRedis = false;
 
 if (!string.IsNullOrEmpty(redisConnectionString))
 {
     try
     {
         redisConfig = ConfigurationOptions.Parse(redisConnectionString);
+        useRedis = true;
     }
     catch (Exception ex)
     {
         Console.WriteLine($"[CRITICAL] Redis String Parsing Failed: {ex.Message}");
+        useRedis = false;
     }
 }
 
-// 2. Setup Distributed Token Cache with exception isolation
-builder.Services.AddStackExchangeRedisCache(options =>
+// IDistributedCache: Redis if possible, otherwise in‑memory
+if (useRedis && redisConfig != null)
 {
-    options.ConfigurationOptions = redisConfig; 
-    options.InstanceName = "TokenCache_";
-});
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.ConfigurationOptions = redisConfig;
+        options.InstanceName = "TokenCache_";
+    });
 
-// 3. Configure Data Protection with a fallback catch block
-if (redisConfig != null)
-{
-    try 
+    try
     {
         var redis = ConnectionMultiplexer.Connect(redisConfig);
         builder.Services.AddDataProtection()
@@ -50,11 +50,16 @@ if (redisConfig != null)
         Console.WriteLine($"[DATA PROTECTION ERROR] Redis connection failed: {ex.Message}");
     }
 }
+else
+{
+    Console.WriteLine("[INFO] Redis not available, falling back to in‑memory cache. Tokens will be lost on restart.");
+    builder.Services.AddDistributedMemoryCache();
+}
 
 builder.Services.AddOpenApi();
 
 builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
-    .EnableTokenAcquisitionToCallDownstreamApi(new string[] { "Files.ReadWrite", "offline_access" })
+    .EnableTokenAcquisitionToCallDownstreamApi(new[] { "Files.ReadWrite", "offline_access" })
     .AddMicrosoftGraph(builder.Configuration.GetSection("MicrosoftGraph"))
     .AddDistributedTokenCaches();
 
@@ -68,23 +73,24 @@ builder.Services.AddAuthorization();
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("StrictStaticSite",
-        policy => {
-            var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
-            if (builder.Environment.IsDevelopment())
-            {
-                policy.SetIsOriginAllowed(_ => true)
-                      .AllowAnyMethod()
-                      .AllowAnyHeader()
-                      .AllowCredentials();
-            }
-            else
-            {
-                policy.WithOrigins(allowedOrigins)
-                      .AllowAnyMethod()
-                      .WithHeaders("X-Custom-Auth-Key", "X-Microsoft-Account-Id", "Content-Type", "Accept", "Authorization");
-            }
-        });
+    options.AddPolicy("StrictStaticSite", policy =>
+    {
+        var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+
+        if (builder.Environment.IsDevelopment())
+        {
+            policy.SetIsOriginAllowed(_ => true)
+                  .AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials();
+        }
+        else
+        {
+            policy.WithOrigins(allowedOrigins)
+                  .AllowAnyMethod()
+                  .WithHeaders("X-Custom-Auth-Key", "X-Microsoft-Account-Id", "Content-Type", "Accept", "Authorization");
+        }
+    });
 });
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -108,6 +114,7 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
 app.UseHttpsRedirection();
 app.UseCors("StrictStaticSite");
 
@@ -122,18 +129,17 @@ app.UseAuthorization();
 
 string foldername = "TaGea2026";
 
-// Helper method to safely build an authenticated Graph Client using the official MSAL cache matching formula
-// Helper method to safely build an authenticated Graph Client using a foolproof direct cache read
+// Helper: build Graph client from cached token keyed by X-Microsoft-Account-Id
 async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, IConfiguration config, IDistributedCache cache)
 {
     if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
     {
+        Console.WriteLine("[AUTH ERROR] Missing X-Microsoft-Account-Id header.");
         return null;
     }
 
-    // Direct read from our explicit, un-hashed custom key
-    string customRedisKey = $"token:{accountId}";
-    string accessToken = await cache.GetStringAsync(customRedisKey) ?? string.Empty;
+    var customRedisKey = $"token:{accountId}";
+    var accessToken = await cache.GetStringAsync(customRedisKey) ?? string.Empty;
 
     if (string.IsNullOrEmpty(accessToken))
     {
@@ -141,12 +147,11 @@ async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest req
         return null;
     }
 
-    // Direct initialization bypassing Kiota's internal auth engine crashes entirely
     var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
     return new GraphServiceClient(authProvider);
 }
 
-// Endpoints
+// OIDC login
 app.MapGet("/login", async (HttpContext context) =>
 {
     await context.ChallengeAsync(OpenIdConnectDefaults.AuthenticationScheme, new AuthenticationProperties
@@ -155,22 +160,27 @@ app.MapGet("/login", async (HttpContext context) =>
     });
 });
 
+// Capture token during interactive login and cache it under token:{userId}
 app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition tokenAcquisition, IDistributedCache cache) =>
 {
     var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
-    
+
     if (!string.IsNullOrEmpty(userId))
     {
         try
         {
-            // Force fetch the active token right now while the browser cookie context exists
-            string accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(new[] { "Files.ReadWrite" }, user: context.User);
-            
+            var accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(
+                new[] { "Files.ReadWrite" },
+                user: context.User);
+
             if (!string.IsNullOrEmpty(accessToken))
             {
-                // Save it explicitly under our own custom key template for 1 hour
-                string customRedisKey = $"token:{userId}";
-                var cacheOptions = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1) };
+                var customRedisKey = $"token:{userId}";
+                var cacheOptions = new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
+                };
+
                 await cache.SetStringAsync(customRedisKey, accessToken, cacheOptions);
                 Console.WriteLine($"[SUCCESS] Manually cached token under custom key: {customRedisKey}");
             }
@@ -181,7 +191,19 @@ app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition token
         }
     }
 
-    return Results.Ok($"Authentication successful! Copy this ID for your frontend: {userId}");
+    // IMPORTANT: frontend must use this userId as X-Microsoft-Account-Id
+    return Results.Json(new
+    {
+        userId,
+        message = "Authentication successful. Use this userId as X-Microsoft-Account-Id in your frontend."
+    });
+});
+
+// Optional helper for debugging from frontend
+app.MapGet("/whoami", (HttpContext context) =>
+{
+    var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
+    return Results.Json(new { userId });
 });
 
 app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
@@ -191,6 +213,7 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
             return Results.Unauthorized();
     }
+
     try
     {
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
@@ -201,7 +224,10 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         var fileNames = childrenResponse?.Value?.Select(item => item.Name).ToList();
         return Results.Ok(fileNames);
     }
-    catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Failed: {ex.Message}");
+    }
 });
 
 app.MapGet("/download-all-images", async (HttpContext context, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
@@ -214,15 +240,22 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
             return;
         }
     }
+
     try
     {
         var graphClient = await GetAuthenticatedGraphClientAsync(context.Request, config, cache);
-        if (graphClient == null) { context.Response.StatusCode = 400; return; }
+        if (graphClient == null)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsync("Missing or invalid authentication data.");
+            return;
+        }
 
         var drive = await graphClient.Drives["root"].GetAsync();
         var userDriveId = drive?.Id;
         var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
         var files = childrenResponse?.Value?.Where(i => i.Folder == null).ToList();
+
         if (files == null || files.Count == 0)
         {
             context.Response.StatusCode = 404;
@@ -233,18 +266,17 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
         context.Response.ContentType = "application/zip";
         context.Response.Headers.Append("Content-Disposition", "attachment; filename=\"images.zip\"");
 
-        using (var archive = new System.IO.Compression.ZipArchive(context.Response.Body, System.IO.Compression.ZipArchiveMode.Create))
+        using var archive = new System.IO.Compression.ZipArchive(context.Response.Body, System.IO.Compression.ZipArchiveMode.Create);
+        foreach (var file in files)
         {
-            foreach (var file in files)
+            if (file.Id == null || file.Name == null) continue;
+
+            var contentStream = await graphClient.Drives[userDriveId].Items[file.Id].Content.GetAsync();
+            if (contentStream != null)
             {
-                if (file.Id == null || file.Name == null) continue;
-                var contentStream = await graphClient.Drives[userDriveId].Items[file.Id].Content.GetAsync();
-                if (contentStream != null)
-                {
-                    var zipEntry = archive.CreateEntry(file.Name);
-                    using var entryStream = zipEntry.Open();
-                    await contentStream.CopyToAsync(entryStream);
-                }
+                var zipEntry = archive.CreateEntry(file.Name);
+                using var entryStream = zipEntry.Open();
+                await contentStream.CopyToAsync(entryStream);
             }
         }
     }
@@ -265,9 +297,11 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
             return Results.Unauthorized();
     }
+
     try
     {
         if (!request.HasFormContentType) return Results.BadRequest("Invalid form content.");
+
         var form = await request.ReadFormAsync();
         var files = form.Files;
         if (files.Count == 0) return Results.BadRequest("No files uploaded.");
@@ -282,27 +316,40 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         foreach (var file in files)
         {
             if (string.IsNullOrEmpty(file.FileName)) continue;
+
             using var stream = file.OpenReadStream();
-            
+
             var uploadSessionRequestBody = new Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession.CreateUploadSessionPostRequestBody
             {
                 Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
                 {
-                    AdditionalData = new Dictionary<string, object> { { "@microsoft.graph.conflictBehavior", "replace" } }
+                    AdditionalData = new Dictionary<string, object>
+                    {
+                        { "@microsoft.graph.conflictBehavior", "replace" }
+                    }
                 }
             };
 
-            var uploadSession = await graphClient.Drives[userDriveId].Root.ItemWithPath($"{foldername}/{file.FileName}").CreateUploadSession.PostAsync(uploadSessionRequestBody);
-            
-            int maxSliceSize = 4 * 320 * 1024; 
-            var fileUploadTask = new Microsoft.Graph.LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(uploadSession, stream, maxSliceSize, graphClient.RequestAdapter);
+            var uploadSession = await graphClient.Drives[userDriveId]
+                .Root
+                .ItemWithPath($"{foldername}/{file.FileName}")
+                .CreateUploadSession
+                .PostAsync(uploadSessionRequestBody);
+
+            var maxSliceSize = 4 * 320 * 1024;
+            var fileUploadTask = new Microsoft.Graph.LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(
+                uploadSession, stream, maxSliceSize, graphClient.RequestAdapter);
+
             await fileUploadTask.UploadAsync();
-                
             uploadedFiles.Add(file.FileName);
         }
+
         return Results.Ok(new { Message = "Files uploaded successfully", Files = uploadedFiles });
     }
-    catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Failed: {ex.Message}");
+    }
 }).WithName("UploadImages");
 
 app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
@@ -312,6 +359,7 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
         if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
             return Results.Unauthorized();
     }
+
     try
     {
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
@@ -321,29 +369,43 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
         var userDriveId = drive?.Id;
         var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
         var files = childrenResponse?.Value?.Where(i => i.Folder == null && i.Name != null).ToList();
+
         if (files == null || files.Count == 0) return Results.Ok(new List<object>());
 
         var random = new Random();
-        var randomImages = files.OrderBy(x => random.Next()).Take(count).Select(i => new 
-        { 
-            Name = i.Name, 
-            Id = i.Id,
-            DownloadUrl = i.AdditionalData != null && i.AdditionalData.ContainsKey("@microsoft.graph.downloadUrl")
-                ? i.AdditionalData["@microsoft.graph.downloadUrl"]?.ToString() 
-                : i.WebUrl
-        }).ToList();
+        var randomImages = files
+            .OrderBy(x => random.Next())
+            .Take(count)
+            .Select(i => new
+            {
+                Name = i.Name,
+                Id = i.Id,
+                DownloadUrl = i.AdditionalData != null && i.AdditionalData.ContainsKey("@microsoft.graph.downloadUrl")
+                    ? i.AdditionalData["@microsoft.graph.downloadUrl"]?.ToString()
+                    : i.WebUrl
+            })
+            .ToList();
+
         return Results.Ok(randomImages);
     }
-    catch (Exception ex) { return Results.Problem($"Failed: {ex.Message}"); }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Failed: {ex.Message}");
+    }
 });
 
 app.Run();
 
-// Token provider mapping class to interface safely with modern Microsoft Kiota runtimes
 public class InMemoryTokenProvider : IAccessTokenProvider
 {
     private readonly string _token;
     public InMemoryTokenProvider(string token) => _token = token;
-    public Task<string> GetAuthorizationTokenAsync(Uri uri, Dictionary<string, object>? additionalContext = null, CancellationToken cancellationToken = default) => Task.FromResult(_token);
+
+    public Task<string> GetAuthorizationTokenAsync(
+        Uri uri,
+        Dictionary<string, object>? additionalContext = null,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult(_token);
+
     public AllowedHostsValidator AllowedHostsValidator { get; } = new();
 }
