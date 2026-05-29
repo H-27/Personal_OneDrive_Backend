@@ -220,8 +220,25 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         if (graphClient == null) return Results.BadRequest("Missing or invalid background authentication data.");
 
         var drive = await graphClient.Drives["root"].GetAsync();
-        var childrenResponse = await graphClient.Drives[drive.Id].Root.ItemWithPath(foldername).Children.GetAsync();
-        var fileNames = childrenResponse?.Value?.Select(item => item.Name).ToList();
+        var userDriveId = drive?.Id;
+
+        // Resolve folder safely
+        var folder = await graphClient.Drives[userDriveId]
+            .Root
+            .ItemWithPath(foldername)
+            .GetAsync();
+
+        if (folder == null || folder.Id == null)
+            return Results.Problem("Folder not found in OneDrive.");
+
+        var childrenResponse = await graphClient.Drives[userDriveId]
+            .Items[folder.Id]
+            .Children
+            .GetAsync();
+
+        var items = childrenResponse?.Value ?? new List<Microsoft.Graph.Models.DriveItem>();
+        var fileNames = items.Select(item => item.Name).ToList();
+
         return Results.Ok(fileNames);
     }
     catch (Exception ex)
@@ -253,8 +270,28 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
 
         var drive = await graphClient.Drives["root"].GetAsync();
         var userDriveId = drive?.Id;
-        var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
-        var files = childrenResponse?.Value?.Where(i => i.Folder == null).ToList();
+
+        // Resolve folder safely
+        var folder = await graphClient.Drives[userDriveId]
+            .Root
+            .ItemWithPath(foldername)
+            .GetAsync();
+
+        if (folder == null || folder.Id == null)
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsync("Folder not found.");
+            return;
+        }
+
+        var childrenResponse = await graphClient.Drives[userDriveId]
+            .Items[folder.Id]
+            .Children
+            .GetAsync();
+
+        var files = (childrenResponse?.Value ?? new List<Microsoft.Graph.Models.DriveItem>())
+            .Where(i => i.Folder == null)
+            .ToList();
 
         if (files == null || files.Count == 0)
         {
@@ -367,8 +404,24 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
 
         var drive = await graphClient.Drives["root"].GetAsync();
         var userDriveId = drive?.Id;
-        var childrenResponse = await graphClient.Drives[userDriveId].Root.ItemWithPath(foldername).Children.GetAsync();
-        var files = childrenResponse?.Value?.Where(i => i.Folder == null && i.Name != null).ToList();
+
+        // Resolve folder safely
+        var folder = await graphClient.Drives[userDriveId]
+            .Root
+            .ItemWithPath(foldername)
+            .GetAsync();
+
+        if (folder == null || folder.Id == null)
+            return Results.Ok(new List<object>());
+
+        var childrenResponse = await graphClient.Drives[userDriveId]
+            .Items[folder.Id]
+            .Children
+            .GetAsync();
+
+        var files = (childrenResponse?.Value ?? new List<Microsoft.Graph.Models.DriveItem>())
+            .Where(i => i.Folder == null && i.Name != null)
+            .ToList();
 
         if (files == null || files.Count == 0) return Results.Ok(new List<object>());
 
