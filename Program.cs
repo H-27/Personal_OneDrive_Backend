@@ -3,11 +3,13 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Graph;
 using Microsoft.Identity.Web;
 using StackExchange.Redis;
 using Microsoft.Kiota.Abstractions.Authentication;
+using Microsoft.Net.Http.Headers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -64,7 +66,7 @@ builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration,
 
 builder.Services.Configure<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme, options =>
 {
-    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SameSite = Microsoft.AspNetCore.Http.SameSiteMode.None;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 });
 
@@ -95,7 +97,7 @@ builder.Services.AddCors(options =>
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownNetworks.Clear();
+    options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 });
 
@@ -119,7 +121,7 @@ app.UseCors("StrictStaticSite");
 
 app.UseCookiePolicy(new CookiePolicyOptions
 {
-    MinimumSameSitePolicy = SameSiteMode.None,
+    MinimumSameSitePolicy = Microsoft.AspNetCore.Http.SameSiteMode.None,
     Secure = CookieSecurePolicy.Always
 });
 
@@ -271,8 +273,13 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
 
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
+        if (string.IsNullOrWhiteSpace(userDriveId))
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsync("Unable to resolve the current user's drive.");
+            return;
+        }
 
-        // Resolve folder safely
         var folder = await graphClient.Drives[userDriveId]
             .Root
             .ItemWithPath(foldername)
@@ -294,10 +301,36 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
             .Where(i => i.Folder == null)
             .ToList();
 
-        if (files == null || files.Count == 0)
+        if (files.Count == 0)
         {
             context.Response.StatusCode = 404;
             await context.Response.WriteAsync("No files found.");
+            return;
+        }
+
+        const int maxFilesPerZip = 100;
+        const long maxTotalZipBytes = 250L * 1024 * 1024;
+
+        var limitedFiles = new List<Microsoft.Graph.Models.DriveItem>();
+        var estimatedTotalBytes = 0L;
+
+        foreach (var file in files)
+        {
+            if (limitedFiles.Count >= maxFilesPerZip)
+                break;
+
+            var fileSize = file.Size ?? 0;
+            if (estimatedTotalBytes + fileSize > maxTotalZipBytes)
+                break;
+
+            limitedFiles.Add(file);
+            estimatedTotalBytes += fileSize;
+        }
+
+        if (limitedFiles.Count == 0)
+        {
+            context.Response.StatusCode = 413;
+            await context.Response.WriteAsync("Requested file set exceeds the per-request safety limit.");
             return;
         }
 
@@ -305,7 +338,7 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
         context.Response.Headers.Append("Content-Disposition", "attachment; filename=\"images.zip\"");
 
         using var archive = new System.IO.Compression.ZipArchive(context.Response.Body, System.IO.Compression.ZipArchiveMode.Create);
-        foreach (var file in files)
+        foreach (var file in limitedFiles)
         {
             if (file.Id == null || file.Name == null) continue;
 
@@ -338,39 +371,83 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
 
     try
     {
-        if (!request.HasFormContentType)
-            return Results.BadRequest("Invalid form content.");
-
-        var form = await request.ReadFormAsync();
-        var files = form.Files;
-        if (files.Count == 0)
-            return Results.BadRequest("No files uploaded.");
-
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null)
             return Results.BadRequest("Invalid authentication initialization data.");
 
-        // Personal OneDrive root
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
-        var uploadedFiles = new List<string>();
+        if (string.IsNullOrWhiteSpace(userDriveId))
+            return Results.BadRequest("Unable to resolve the current user's drive.");
 
-        foreach (var file in files)
+        if (!request.HasFormContentType)
+            return Results.BadRequest("Invalid multipart upload request.");
+
+        if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType) || string.IsNullOrWhiteSpace(contentType.Boundary.Value))
+            return Results.BadRequest("Missing multipart boundary.");
+
+        var boundary = Microsoft.Net.Http.Headers.HeaderUtilities.RemoveQuotes(contentType.Boundary).Value;
+        if (string.IsNullOrWhiteSpace(boundary))
+            return Results.BadRequest("Missing multipart boundary.");
+
+        var reader = new MultipartReader(boundary, request.Body)
         {
-            if (string.IsNullOrEmpty(file.FileName)) continue;
+            HeadersCountLimit = 32,
+            BodyLengthLimit = long.MaxValue
+        };
 
-            using var stream = file.OpenReadStream();
+        var uploadedFiles = new List<string>();
+        MultipartSection? section;
 
-            // Simple upload: PUT /drives/{id}/root:/{foldername}/{filename}:/content
-            var uploaded = await graphClient.Drives[userDriveId]
+        while ((section = await reader.ReadNextSectionAsync()) != null)
+        {
+            if (!Microsoft.Net.Http.Headers.ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition))
+                continue;
+
+            var hasFileName = !string.IsNullOrEmpty(disposition.FileName.Value) || !string.IsNullOrEmpty(disposition.FileNameStar.Value);
+            if (!disposition.DispositionType.Equals("form-data", StringComparison.OrdinalIgnoreCase) || !hasFileName)
+                continue;
+
+            var fileName = Path.GetFileName(disposition.FileNameStar.Value ?? disposition.FileName.Value);
+            if (string.IsNullOrWhiteSpace(fileName))
+                continue;
+
+            var uploadSessionRequestBody = new Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession.CreateUploadSessionPostRequestBody
+            {
+                Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
+                {
+                    Name = fileName,
+                    AdditionalData = new Dictionary<string, object>
+                    {
+                        ["@microsoft.graph.conflictBehavior"] = "rename"
+                    }
+                }
+            };
+
+            var uploadSession = await graphClient.Drives[userDriveId]
                 .Root
-                .ItemWithPath($"{foldername}/{file.FileName}")
-                .Content
-                .PutAsync(stream);
+                .ItemWithPath($"{foldername}/{fileName}")
+                .CreateUploadSession
+                .PostAsync(uploadSessionRequestBody);
 
-            if (uploaded != null)
-                uploadedFiles.Add(file.FileName);
+            if (uploadSession?.UploadUrl == null)
+                return Results.Problem($"Failed to create upload session for {fileName}.");
+
+            var uploadTask = new LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(
+                uploadSession,
+                section.Body,
+                320 * 1024,
+                graphClient.RequestAdapter);
+
+            var uploadResult = await uploadTask.UploadAsync();
+            if (!uploadResult.UploadSucceeded)
+                return Results.Problem($"Upload did not complete for {fileName}.");
+
+            uploadedFiles.Add(fileName);
         }
+
+        if (uploadedFiles.Count == 0)
+            return Results.BadRequest("No files uploaded.");
 
         return Results.Ok(new { Message = "Files uploaded successfully", Files = uploadedFiles });
     }
@@ -397,8 +474,8 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
 
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
+        if (string.IsNullOrWhiteSpace(userDriveId)) return Results.BadRequest("Unable to resolve the current user's drive.");
 
-        // Resolve folder safely
         var folder = await graphClient.Drives[userDriveId]
             .Root
             .ItemWithPath(foldername)
@@ -416,7 +493,7 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
             .Where(i => i.Folder == null && i.Name != null)
             .ToList();
 
-        if (files == null || files.Count == 0) return Results.Ok(new List<object>());
+        if (files.Count == 0) return Results.Ok(new List<object>());
 
         var random = new Random();
         var randomImages = files
