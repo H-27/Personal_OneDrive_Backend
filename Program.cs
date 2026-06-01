@@ -126,6 +126,8 @@ app.UseCookiePolicy(new CookiePolicyOptions
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapGet("/health", () => Results.Ok("OK")).AllowAnonymous();
+
 string foldername = "TaGea2026";
 
 // Helper: build Graph client from cached token keyed by X-Microsoft-Account-Id

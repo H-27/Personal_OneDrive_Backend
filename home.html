@@ -224,7 +224,42 @@
         window.addEventListener('resize', autoScaleHome);
         
         autoScaleHome();
-        loadRandomImages();
+
+        // Health check to ensure server is awake before making other API requests
+        async function wakeUpServerAndLoad() {
+            let isServerAwake = false;
+
+            const wakingUpMsg = document.createElement('div');
+            wakingUpMsg.style.position = 'fixed';
+            wakingUpMsg.style.top = '80%';
+            wakingUpMsg.style.left = '50%';
+            wakingUpMsg.style.transform = 'translate(-50%, -50%)';
+            wakingUpMsg.style.zIndex = '10000';
+            wakingUpMsg.style.color = '#333';
+            wakingUpMsg.style.background = 'white';
+            wakingUpMsg.style.padding = '10px 20px';
+            wakingUpMsg.style.borderRadius = '8px';
+            wakingUpMsg.style.fontFamily = 'sans-serif';
+            wakingUpMsg.style.fontWeight = 'bold';
+            wakingUpMsg.style.boxShadow = '0px 4px 10px rgba(0,0,0,0.2)';
+            wakingUpMsg.innerText = 'Server is waking up...';
+            document.body.appendChild(wakingUpMsg);
+
+            try {
+                // Fetch health endpoint
+                const response = await fetch(`${API_BASE_URL}/health`);
+                if (response.ok) {
+                    isServerAwake = true;
+                }
+            } catch (error) {
+                console.error("Health check failed, assuming server is still waking up", error);
+            } finally {
+                wakingUpMsg.remove();
+                loadRandomImages();
+            }
+        }
+
+        wakeUpServerAndLoad();
     </script>
 </body>
 </html>
