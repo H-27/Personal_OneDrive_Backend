@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>home</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         /* Modern mobile viewports require containment at the root level to prevent clipping */
         html {
@@ -135,37 +136,51 @@
             }
         });
 
-        // Handle ZIP Generation and Download
+        // Handle ZIP Generation and Download (client-side via JSZip)
         downloadBtn.addEventListener('click', async () => {
-            if (loadingOverlay) {
-                loadingOverlay.classList.remove('hidden');
-            }
+            if (loadingOverlay) loadingOverlay.classList.remove('hidden');
 
             try {
-                const response = await fetch(`${API_BASE_URL}/download-all-images?cb=${new Date().getTime()}`, {
+                const response = await fetch(`${API_BASE_URL}/get-all-download-urls?cb=${new Date().getTime()}`, {
                     method: 'GET',
-                    headers: { 
+                    headers: {
                         'X-Custom-Auth-Key': CUSTOM_API_KEY,
                         'X-Microsoft-Account-Id': MS_ACCOUNT_ID
                     }
                 });
-                if (!response.ok) throw new Error('Download failed');
-                
-                const blob = await response.blob();
-                const downloadUrl = window.URL.createObjectURL(blob);
+                if (!response.ok) throw new Error('Failed to fetch download URLs');
+
+                const files = await response.json();
+                if (!files || files.length === 0) {
+                    alert('No images found to download.');
+                    return;
+                }
+
+                const zip = new JSZip();
+
+                await Promise.all(files.map(async (file) => {
+                    const url = file.downloadUrl || file.DownloadUrl;
+                    const name = file.name || file.Name;
+                    if (!url || !name) return;
+                    const fileResponse = await fetch(url);
+                    if (!fileResponse.ok) throw new Error(`Failed to fetch ${name}`);
+                    const blob = await fileResponse.blob();
+                    zip.file(name, blob);
+                }));
+
+                const zipBlob = await zip.generateAsync({ type: 'blob' });
+                const zipUrl = window.URL.createObjectURL(zipBlob);
                 const a = document.createElement('a');
-                a.href = downloadUrl;
+                a.href = zipUrl;
                 a.download = 'images.zip';
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-                window.URL.revokeObjectURL(downloadUrl);
+                window.URL.revokeObjectURL(zipUrl);
             } catch (error) {
                 alert('Download failed.');
             } finally {
-                if (loadingOverlay) {
-                    loadingOverlay.classList.add('hidden');
-                }
+                if (loadingOverlay) loadingOverlay.classList.add('hidden');
             }
         });
 

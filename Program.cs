@@ -64,6 +64,10 @@ builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration,
     .AddMicrosoftGraph(builder.Configuration.GetSection("MicrosoftGraph"))
     .AddDistributedTokenCaches();
 
+builder.Services.Configure<Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectOptions>(
+    Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectDefaults.AuthenticationScheme,
+    options => { options.SaveTokens = true; });
+
 builder.Services.Configure<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme, options =>
 {
     options.Cookie.SameSite = Microsoft.AspNetCore.Http.SameSiteMode.None;
@@ -135,6 +139,53 @@ app.MapGet("/health", () => Results.Ok("OK")).AllowAnonymous();
 
 string foldername = "TaGea2026";
 
+// Helper: use stored refresh token to silently obtain a new access token
+async Task<string?> TryRefreshTokenAsync(string accountId, IDistributedCache cache, IConfiguration config)
+{
+    var refreshToken = await cache.GetStringAsync($"refresh_token:{accountId}");
+    if (string.IsNullOrEmpty(refreshToken)) return null;
+
+    var tenantId = config["AzureAd:TenantId"];
+    var clientId = config["AzureAd:ClientId"];
+    var clientSecret = config["AzureAd:ClientSecret"];
+    if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret)) return null;
+
+    using var http = new HttpClient();
+    var tokenResponse = await http.PostAsync(
+        $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token",
+        new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("grant_type", "refresh_token"),
+            new KeyValuePair<string, string>("client_id", clientId),
+            new KeyValuePair<string, string>("client_secret", clientSecret),
+            new KeyValuePair<string, string>("refresh_token", refreshToken),
+            new KeyValuePair<string, string>("scope", "Files.ReadWrite offline_access")
+        }));
+
+    if (!tokenResponse.IsSuccessStatusCode) return null;
+
+    using var json = System.Text.Json.JsonDocument.Parse(await tokenResponse.Content.ReadAsStringAsync());
+    var root = json.RootElement;
+
+    var newAccessToken = root.GetProperty("access_token").GetString();
+    if (string.IsNullOrEmpty(newAccessToken)) return null;
+
+    await cache.SetStringAsync($"token:{accountId}", newAccessToken, new DistributedCacheEntryOptions
+    {
+        AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
+    });
+
+    if (root.TryGetProperty("refresh_token", out var newRt) && !string.IsNullOrEmpty(newRt.GetString()))
+    {
+        await cache.SetStringAsync($"refresh_token:{accountId}", newRt.GetString()!, new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(90)
+        });
+    }
+
+    return newAccessToken;
+}
+
 // Helper: build Graph client from cached token keyed by X-Microsoft-Account-Id
 async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, IConfiguration config, IDistributedCache cache)
 {
@@ -149,8 +200,14 @@ async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest req
 
     if (string.IsNullOrEmpty(accessToken))
     {
-        Console.WriteLine($"[AUTH ERROR] No token found in custom key {customRedisKey}. Re-login required.");
-        return null;
+        Console.WriteLine($"[AUTH] No access token for {accountId}, attempting silent refresh...");
+        accessToken = await TryRefreshTokenAsync(accountId!, cache, config) ?? string.Empty;
+        if (string.IsNullOrEmpty(accessToken))
+        {
+            Console.WriteLine($"[AUTH ERROR] Token refresh failed for {accountId}. Re-login required.");
+            return null;
+        }
+        Console.WriteLine($"[AUTH] Token refreshed successfully for {accountId}.");
     }
 
     var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
@@ -182,13 +239,21 @@ app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition token
             if (!string.IsNullOrEmpty(accessToken))
             {
                 var customRedisKey = $"token:{userId}";
-                var cacheOptions = new DistributedCacheEntryOptions
+                await cache.SetStringAsync(customRedisKey, accessToken, new DistributedCacheEntryOptions
                 {
                     AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
-                };
+                });
+                Console.WriteLine($"[SUCCESS] Cached access token under custom key: {customRedisKey}");
 
-                await cache.SetStringAsync(customRedisKey, accessToken, cacheOptions);
-                Console.WriteLine($"[SUCCESS] Manually cached token under custom key: {customRedisKey}");
+                var refreshToken = await context.GetTokenAsync("refresh_token");
+                if (!string.IsNullOrEmpty(refreshToken))
+                {
+                    await cache.SetStringAsync($"refresh_token:{userId}", refreshToken, new DistributedCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(90)
+                    });
+                    Console.WriteLine($"[SUCCESS] Cached refresh token for {userId}");
+                }
             }
         }
         catch (Exception ex)
