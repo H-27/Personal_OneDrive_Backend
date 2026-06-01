@@ -87,9 +87,12 @@ builder.Services.AddCors(options =>
         }
         else
         {
-            policy.WithOrigins(allowedOrigins)
+            var origins = allowedOrigins.ToList();
+            origins.Add("https://tagea2026.onrender.com");
+            policy.WithOrigins(origins.ToArray())
                   .AllowAnyMethod()
-                  .WithHeaders("X-Custom-Auth-Key", "X-Microsoft-Account-Id", "Content-Type", "Accept", "Authorization");
+                  .AllowAnyHeader()
+                  .AllowCredentials();
         }
     });
 });
@@ -510,6 +513,62 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
             .ToList();
 
         return Results.Ok(randomImages);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Failed: {ex.Message}");
+    }
+});
+
+
+app.MapGet("/get-all-download-urls", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
+{
+    if (!env.IsDevelopment())
+    {
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
+            return Results.Unauthorized();
+    }
+
+    try
+    {
+        var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
+        if (graphClient == null) return Results.BadRequest("Invalid initialization metadata.");
+
+        var driveItem = await graphClient.Me.Drive.GetAsync();
+        var userDriveId = driveItem?.Id;
+        if (string.IsNullOrWhiteSpace(userDriveId)) return Results.BadRequest("Unable to resolve the current user's drive.");
+
+        var folder = await graphClient.Drives[userDriveId]
+            .Root
+            .ItemWithPath(foldername)
+            .GetAsync();
+
+        if (folder == null || folder.Id == null)
+            return Results.Ok(new List<object>());
+
+        var childrenResponse = await graphClient.Drives[userDriveId]
+            .Items[folder.Id]
+            .Children
+            .GetAsync();
+
+        var files = (childrenResponse?.Value ?? new List<Microsoft.Graph.Models.DriveItem>())
+            .Where(i => i.Folder == null && i.Name != null)
+            .ToList();
+
+        if (files.Count == 0) return Results.Ok(new List<object>());
+
+        var allImages = files
+            .Select(i => new
+            {
+                Name = i.Name,
+                Id = i.Id,
+                DownloadUrl = i.AdditionalData != null && i.AdditionalData.ContainsKey("@microsoft.graph.downloadUrl")
+                    ? i.AdditionalData["@microsoft.graph.downloadUrl"]?.ToString()
+                    : i.WebUrl
+            })
+            .ToList();
+
+        return Results.Ok(allImages);
     }
     catch (Exception ex)
     {
