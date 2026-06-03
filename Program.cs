@@ -147,7 +147,25 @@ app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok("OK")).AllowAnonymous();
 
+// The set of OneDrive folders the API is allowed to serve. Each frontend page maps to
+// one of these. Add a new entry here to expose a new page's folder.
+List<string> allowedFolders = new List<string> { "TaGea2026", "RHP2026", "WWS2026" };
+
+// Default folder used when a request does not specify ?folder=, so existing pages that
+// predate the multi-folder support keep working without any frontend change.
 string foldername = "TaGea2026";
+
+// Resolves the target folder from the ?folder= query string, validating it against the
+// allowlist (case-insensitive). Returns the default folder when none is supplied, or null
+// when an unknown folder is requested so the caller can reject it.
+string? ResolveFolder(HttpRequest request)
+{
+    var requested = request.Query["folder"].ToString();
+    if (string.IsNullOrWhiteSpace(requested))
+        return foldername;
+
+    return allowedFolders.FirstOrDefault(f => string.Equals(f, requested, StringComparison.OrdinalIgnoreCase));
+}
 
 // Scope set sent to the token endpoint on refresh. offline_access keeps the
 // refresh token rotating so the 90-day sliding window is renewed on every use.
@@ -357,6 +375,9 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Missing or invalid background authentication data.");
 
+        var folderName = ResolveFolder(request);
+        if (folderName == null) return Results.BadRequest("Unknown folder.");
+
         // Use Me.Drive (personal OneDrive-safe)
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
@@ -364,7 +385,7 @@ app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config,
         // Resolve folder safely
         var folder = await graphClient.Drives[userDriveId]
             .Root
-            .ItemWithPath(foldername)
+            .ItemWithPath(folderName)
             .GetAsync();
 
         if (folder == null || folder.Id == null)
@@ -407,6 +428,14 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
             return;
         }
 
+        var folderName = ResolveFolder(context.Request);
+        if (folderName == null)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsync("Unknown folder.");
+            return;
+        }
+
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
         if (string.IsNullOrWhiteSpace(userDriveId))
@@ -418,7 +447,7 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
 
         var folder = await graphClient.Drives[userDriveId]
             .Root
-            .ItemWithPath(foldername)
+            .ItemWithPath(folderName)
             .GetAsync();
 
         if (folder == null || folder.Id == null)
@@ -511,6 +540,9 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         if (graphClient == null)
             return Results.BadRequest("Invalid authentication initialization data.");
 
+        var folderName = ResolveFolder(request);
+        if (folderName == null) return Results.BadRequest("Unknown folder.");
+
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
         if (string.IsNullOrWhiteSpace(userDriveId))
@@ -562,7 +594,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
 
             var uploadSession = await graphClient.Drives[userDriveId]
                 .Root
-                .ItemWithPath($"{foldername}/{fileName}")
+                .ItemWithPath($"{folderName}/{fileName}")
                 .CreateUploadSession
                 .PostAsync(uploadSessionRequestBody);
 
@@ -608,13 +640,16 @@ app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Invalid initialization metadata.");
 
+        var folderName = ResolveFolder(request);
+        if (folderName == null) return Results.BadRequest("Unknown folder.");
+
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
         if (string.IsNullOrWhiteSpace(userDriveId)) return Results.BadRequest("Unable to resolve the current user's drive.");
 
         var folder = await graphClient.Drives[userDriveId]
             .Root
-            .ItemWithPath(foldername)
+            .ItemWithPath(folderName)
             .GetAsync();
 
         if (folder == null || folder.Id == null)
@@ -667,13 +702,16 @@ app.MapGet("/get-all-download-urls", async (HttpRequest request, IConfiguration 
         var graphClient = await GetAuthenticatedGraphClientAsync(request, config, cache);
         if (graphClient == null) return Results.BadRequest("Invalid initialization metadata.");
 
+        var folderName = ResolveFolder(request);
+        if (folderName == null) return Results.BadRequest("Unknown folder.");
+
         var driveItem = await graphClient.Me.Drive.GetAsync();
         var userDriveId = driveItem?.Id;
         if (string.IsNullOrWhiteSpace(userDriveId)) return Results.BadRequest("Unable to resolve the current user's drive.");
 
         var folder = await graphClient.Drives[userDriveId]
             .Root
-            .ItemWithPath(foldername)
+            .ItemWithPath(folderName)
             .GetAsync();
 
         if (folder == null || folder.Id == null)
