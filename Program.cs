@@ -59,14 +59,24 @@ else
 
 builder.Services.AddOpenApi();
 
-builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd")
-    .EnableTokenAcquisitionToCallDownstreamApi(new[] { "Files.ReadWrite", "offline_access" })
-    .AddMicrosoftGraph(builder.Configuration.GetSection("MicrosoftGraph"))
-    .AddDistributedTokenCaches();
+// Plain OIDC web-app sign-in (no MSAL downstream-API token acquisition).
+// We deliberately do NOT call EnableTokenAcquisitionToCallDownstreamApi: that makes MSAL
+// redeem the auth code and keep the refresh token in its own cache, where GetTokenAsync
+// cannot reach it. With plain sign-in + SaveTokens + the offline_access scope, the OIDC
+// handler redeems the code itself and the access AND refresh tokens land in the auth
+// properties, so /login-success can capture the refresh token and persist it to Upstash.
+builder.Services.AddMicrosoftIdentityWebAppAuthentication(builder.Configuration, "AzureAd");
 
 builder.Services.Configure<Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectOptions>(
     Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectDefaults.AuthenticationScheme,
-    options => { options.SaveTokens = true; });
+    options =>
+    {
+        options.SaveTokens = true;
+        options.ResponseType = "code";
+        // Graph delegated scope used for OneDrive, plus offline_access to receive a refresh token.
+        options.Scope.Add("Files.ReadWrite");
+        options.Scope.Add("offline_access");
+    });
 
 builder.Services.Configure<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme, options =>
 {
@@ -139,16 +149,32 @@ app.MapGet("/health", () => Results.Ok("OK")).AllowAnonymous();
 
 string foldername = "TaGea2026";
 
-// Helper: use stored refresh token to silently obtain a new access token
+// Scope set sent to the token endpoint on refresh. offline_access keeps the
+// refresh token rotating so the 90-day sliding window is renewed on every use.
+const string graphScopes = "Files.ReadWrite offline_access";
+
+// Helper: use the stored refresh token to silently obtain a new access token.
+// This is what makes the app survive cold starts: as long as Upstash still holds
+// refresh_token:{accountId}, no interactive login is needed.
 async Task<string?> TryRefreshTokenAsync(string accountId, IDistributedCache cache, IConfiguration config)
 {
     var refreshToken = await cache.GetStringAsync($"refresh_token:{accountId}");
-    if (string.IsNullOrEmpty(refreshToken)) return null;
+    if (string.IsNullOrEmpty(refreshToken))
+    {
+        Console.WriteLine($"[REFRESH] No refresh_token cached for {accountId}. " +
+            "It was either never captured at login or the cache (Upstash) did not persist it across restart.");
+        return null;
+    }
 
     var tenantId = config["AzureAd:TenantId"];
     var clientId = config["AzureAd:ClientId"];
     var clientSecret = config["AzureAd:ClientSecret"];
-    if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret)) return null;
+    if (string.IsNullOrEmpty(tenantId) || string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret))
+    {
+        Console.WriteLine($"[REFRESH] Missing AzureAd config (tenantId/clientId/clientSecret). " +
+            $"tenantId set: {!string.IsNullOrEmpty(tenantId)}, clientId set: {!string.IsNullOrEmpty(clientId)}, clientSecret set: {!string.IsNullOrEmpty(clientSecret)}.");
+        return null;
+    }
 
     using var http = new HttpClient();
     var tokenResponse = await http.PostAsync(
@@ -159,10 +185,16 @@ async Task<string?> TryRefreshTokenAsync(string accountId, IDistributedCache cac
             new KeyValuePair<string, string>("client_id", clientId),
             new KeyValuePair<string, string>("client_secret", clientSecret),
             new KeyValuePair<string, string>("refresh_token", refreshToken),
-            new KeyValuePair<string, string>("scope", "Files.ReadWrite offline_access")
+            new KeyValuePair<string, string>("scope", graphScopes)
         }));
 
-    if (!tokenResponse.IsSuccessStatusCode) return null;
+    if (!tokenResponse.IsSuccessStatusCode)
+    {
+        var errorBody = await tokenResponse.Content.ReadAsStringAsync();
+        Console.WriteLine($"[REFRESH] Microsoft rejected refresh_token grant for {accountId}. " +
+            $"Status {(int)tokenResponse.StatusCode}. Body: {errorBody}");
+        return null;
+    }
 
     using var json = System.Text.Json.JsonDocument.Parse(await tokenResponse.Content.ReadAsStringAsync());
     var root = json.RootElement;
@@ -175,6 +207,8 @@ async Task<string?> TryRefreshTokenAsync(string accountId, IDistributedCache cac
         AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
     });
 
+    // Microsoft rotates the refresh token on each redemption. Persist the new one so the
+    // 90-day sliding window restarts; failing to do so would silently expire the session.
     if (root.TryGetProperty("refresh_token", out var newRt) && !string.IsNullOrEmpty(newRt.GetString()))
     {
         await cache.SetStringAsync($"refresh_token:{accountId}", newRt.GetString()!, new DistributedCacheEntryOptions
@@ -183,10 +217,12 @@ async Task<string?> TryRefreshTokenAsync(string accountId, IDistributedCache cac
         });
     }
 
+    Console.WriteLine($"[REFRESH] Obtained a new access token for {accountId} via refresh token.");
     return newAccessToken;
 }
 
-// Helper: build Graph client from cached token keyed by X-Microsoft-Account-Id
+// Helper: build a Graph client from the cached access token keyed by X-Microsoft-Account-Id,
+// silently refreshing via the stored refresh token when the access token is missing/expired.
 async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest request, IConfiguration config, IDistributedCache cache)
 {
     if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
@@ -195,8 +231,7 @@ async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest req
         return null;
     }
 
-    var customRedisKey = $"token:{accountId}";
-    var accessToken = await cache.GetStringAsync(customRedisKey) ?? string.Empty;
+    var accessToken = await cache.GetStringAsync($"token:{accountId}") ?? string.Empty;
 
     if (string.IsNullOrEmpty(accessToken))
     {
@@ -207,7 +242,6 @@ async Task<GraphServiceClient?> GetAuthenticatedGraphClientAsync(HttpRequest req
             Console.WriteLine($"[AUTH ERROR] Token refresh failed for {accountId}. Re-login required.");
             return null;
         }
-        Console.WriteLine($"[AUTH] Token refreshed successfully for {accountId}.");
     }
 
     var authProvider = new BaseBearerTokenAuthenticationProvider(new InMemoryTokenProvider(accessToken));
@@ -223,8 +257,9 @@ app.MapGet("/login", async (HttpContext context) =>
     });
 });
 
-// Capture token during interactive login and cache it under token:{userId}
-app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition tokenAcquisition, IDistributedCache cache) =>
+// Capture the access + refresh tokens saved on the auth cookie (SaveTokens=true) during
+// interactive login and persist them to Upstash so background, cookie-less calls work.
+app.MapGet("/login-success", async (HttpContext context, IDistributedCache cache) =>
 {
     var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
 
@@ -232,33 +267,40 @@ app.MapGet("/login-success", async (HttpContext context, ITokenAcquisition token
     {
         try
         {
-            var accessToken = await tokenAcquisition.GetAccessTokenForUserAsync(
-                new[] { "Files.ReadWrite" },
-                user: context.User);
-
+            var accessToken = await context.GetTokenAsync("access_token");
             if (!string.IsNullOrEmpty(accessToken))
             {
-                var customRedisKey = $"token:{userId}";
-                await cache.SetStringAsync(customRedisKey, accessToken, new DistributedCacheEntryOptions
+                await cache.SetStringAsync($"token:{userId}", accessToken, new DistributedCacheEntryOptions
                 {
                     AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
                 });
-                Console.WriteLine($"[SUCCESS] Cached access token under custom key: {customRedisKey}");
+                Console.WriteLine($"[SUCCESS] Cached access token for {userId}.");
+            }
+            else
+            {
+                Console.WriteLine($"[WARN] No access_token on the auth cookie for {userId}. " +
+                    "Check that the OIDC handler has SaveTokens=true and the Files.ReadWrite scope.");
+            }
 
-                var refreshToken = await context.GetTokenAsync("refresh_token");
-                if (!string.IsNullOrEmpty(refreshToken))
+            var refreshToken = await context.GetTokenAsync("refresh_token");
+            if (!string.IsNullOrEmpty(refreshToken))
+            {
+                await cache.SetStringAsync($"refresh_token:{userId}", refreshToken, new DistributedCacheEntryOptions
                 {
-                    await cache.SetStringAsync($"refresh_token:{userId}", refreshToken, new DistributedCacheEntryOptions
-                    {
-                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(90)
-                    });
-                    Console.WriteLine($"[SUCCESS] Cached refresh token for {userId}");
-                }
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(90)
+                });
+                Console.WriteLine($"[SUCCESS] Cached refresh token for {userId}. Cold-start silent refresh is now enabled.");
+            }
+            else
+            {
+                Console.WriteLine($"[WARN] No refresh_token on the auth cookie for {userId}. " +
+                    "The offline_access scope must be requested and EnableTokenAcquisitionToCallDownstreamApi must NOT be in use, " +
+                    "otherwise the refresh token never reaches the cookie and 90-day silent refresh cannot work.");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[WARN] Could not capture raw token during login: {ex.Message}");
+            Console.WriteLine($"[WARN] Could not capture tokens during login: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -274,6 +316,32 @@ app.MapGet("/whoami", (HttpContext context) =>
 {
     var userId = context.User.FindFirst("http://schemas.microsoft.com/identity/claims/objectidentifier")?.Value;
     return Results.Json(new { userId });
+});
+
+// Diagnostic: reports whether tokens for an account survive in the cache (Upstash).
+// Does NOT return token values. Protected by the custom API key outside Development.
+app.MapGet("/debug/token-state", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
+{
+    if (!env.IsDevelopment())
+    {
+        if (!request.Headers.TryGetValue("X-Custom-Auth-Key", out var extractedKey) || extractedKey != config["CustomApiKey"])
+            return Results.Unauthorized();
+    }
+
+    if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountId) || string.IsNullOrEmpty(accountId))
+        return Results.BadRequest("Missing X-Microsoft-Account-Id header.");
+
+    var accessToken = await cache.GetStringAsync($"token:{accountId}");
+    var refreshToken = await cache.GetStringAsync($"refresh_token:{accountId}");
+
+    return Results.Json(new
+    {
+        accountId = accountId.ToString(),
+        accessTokenCached = !string.IsNullOrEmpty(accessToken),
+        // The one that matters for cold starts. If this is false right after login, capture failed.
+        // If it is true after login but false after a cold start, Upstash is not persisting.
+        refreshTokenCached = !string.IsNullOrEmpty(refreshToken)
+    });
 });
 
 app.MapGet("/get-image-list", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
