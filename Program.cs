@@ -103,6 +103,8 @@ builder.Services.AddCors(options =>
         {
             var origins = allowedOrigins.ToList();
             origins.Add("https://tagea2026.onrender.com");
+            origins.Add("https://rhp2026.onrender.com");
+            origins.Add("https://wws2026.onrender.com");
             policy.WithOrigins(origins.ToArray())
                   .AllowAnyMethod()
                   .AllowAnyHeader()
