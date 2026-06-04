@@ -3,13 +3,11 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Graph;
 using Microsoft.Identity.Web;
 using StackExchange.Redis;
 using Microsoft.Kiota.Abstractions.Authentication;
-using Microsoft.Net.Http.Headers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -528,7 +526,10 @@ app.MapGet("/download-all-images", async (HttpContext context, IConfiguration co
     }
 });
 
-app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
+// Bandwidth saver: instead of proxying file bytes through Render, hand the browser a
+// pre-authorized OneDrive upload URL per file. The browser PUTs the bytes straight to
+// OneDrive, so only a few hundred bytes per file ever touch this server.
+app.MapPost("/create-upload-sessions", async (HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>
 {
     if (!env.IsDevelopment())
     {
@@ -542,6 +543,13 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         if (graphClient == null)
             return Results.BadRequest("Invalid authentication initialization data.");
 
+        // The access token was just refreshed by GetAuthenticatedGraphClientAsync if it was stale.
+        if (!request.Headers.TryGetValue("X-Microsoft-Account-Id", out var accountIdHeader) || string.IsNullOrEmpty(accountIdHeader))
+            return Results.BadRequest("Missing account ID.");
+        var accessToken = await cache.GetStringAsync($"token:{accountIdHeader}");
+        if (string.IsNullOrEmpty(accessToken))
+            return Results.BadRequest("Could not obtain access token.");
+
         var folderName = ResolveFolder(request);
         if (folderName == null) return Results.BadRequest("Unknown folder.");
 
@@ -550,84 +558,59 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
         if (string.IsNullOrWhiteSpace(userDriveId))
             return Results.BadRequest("Unable to resolve the current user's drive.");
 
-        if (!request.HasFormContentType)
-            return Results.BadRequest("Invalid multipart upload request.");
+        // Body: { "fileNames": ["a.jpg", "b.png"] }
+        using var bodyDoc = await System.Text.Json.JsonDocument.ParseAsync(request.Body);
+        if (!bodyDoc.RootElement.TryGetProperty("fileNames", out var fileNamesElement) || fileNamesElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return Results.BadRequest("No file names provided.");
 
-        if (!Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(request.ContentType, out var contentType) || string.IsNullOrWhiteSpace(contentType.Boundary.Value))
-            return Results.BadRequest("Missing multipart boundary.");
+        var fileNames = fileNamesElement.EnumerateArray()
+            .Select(e => e.GetString())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+        if (fileNames.Count == 0)
+            return Results.BadRequest("No file names provided.");
 
-        var boundary = Microsoft.Net.Http.Headers.HeaderUtilities.RemoveQuotes(contentType.Boundary).Value;
-        if (string.IsNullOrWhiteSpace(boundary))
-            return Results.BadRequest("Missing multipart boundary.");
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
 
-        var reader = new MultipartReader(boundary, request.Body)
+        var sessions = new List<object>();
+        foreach (var rawName in fileNames)
         {
-            HeadersCountLimit = 32,
-            BodyLengthLimit = long.MaxValue
-        };
+            var fileName = Path.GetFileName(rawName!);
+            if (string.IsNullOrWhiteSpace(fileName)) continue;
 
-        var uploadedFiles = new List<string>();
-        MultipartSection? section;
+            // POST createUploadSession directly to avoid the Graph SDK's broken OdataType serialization.
+            var encodedPath = $"{Uri.EscapeDataString(folderName)}/{Uri.EscapeDataString(fileName)}";
+            var sessionUrl = $"https://graph.microsoft.com/v1.0/drives/{userDriveId}/root:/{encodedPath}:/createUploadSession";
+            var sessionPayload = """{"item":{"@microsoft.graph.conflictBehavior":"rename"}}""";
+            var sessionResponse = await http.PostAsync(sessionUrl, new StringContent(sessionPayload, System.Text.Encoding.UTF8, "application/json"));
 
-        while ((section = await reader.ReadNextSectionAsync()) != null)
-        {
-            if (!Microsoft.Net.Http.Headers.ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition))
-                continue;
-
-            var hasFileName = !string.IsNullOrEmpty(disposition.FileName.Value) || !string.IsNullOrEmpty(disposition.FileNameStar.Value);
-            if (!disposition.DispositionType.Equals("form-data", StringComparison.OrdinalIgnoreCase) || !hasFileName)
-                continue;
-
-            var fileName = Path.GetFileName(disposition.FileNameStar.Value ?? disposition.FileName.Value);
-            if (string.IsNullOrWhiteSpace(fileName))
-                continue;
-
-            var uploadSessionRequestBody = new Microsoft.Graph.Drives.Item.Items.Item.CreateUploadSession.CreateUploadSessionPostRequestBody
+            if (!sessionResponse.IsSuccessStatusCode)
             {
-                Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
-                {
-                    OdataType = null,
-                    Name = fileName,
-                    AdditionalData = new Dictionary<string, object>
-                    {
-                        ["@microsoft.graph.conflictBehavior"] = "rename"
-                    }
-                }
-            };
-
-            var uploadSession = await graphClient.Drives[userDriveId]
-                .Root
-                .ItemWithPath($"{folderName}/{fileName}")
-                .CreateUploadSession
-                .PostAsync(uploadSessionRequestBody);
-
-            if (uploadSession?.UploadUrl == null)
+                var err = await sessionResponse.Content.ReadAsStringAsync();
+                Console.WriteLine($"[UPLOAD ERROR] createUploadSession failed for {fileName}: {err}");
                 return Results.Problem($"Failed to create upload session for {fileName}.");
+            }
 
-            var uploadTask = new LargeFileUploadTask<Microsoft.Graph.Models.DriveItem>(
-                uploadSession,
-                section.Body,
-                320 * 1024,
-                graphClient.RequestAdapter);
+            using var sessionDoc = System.Text.Json.JsonDocument.Parse(await sessionResponse.Content.ReadAsStringAsync());
+            var uploadUrl = sessionDoc.RootElement.GetProperty("uploadUrl").GetString();
+            if (string.IsNullOrEmpty(uploadUrl))
+                return Results.Problem($"No upload URL returned for {fileName}.");
 
-            var uploadResult = await uploadTask.UploadAsync();
-            if (!uploadResult.UploadSucceeded)
-                return Results.Problem($"Upload did not complete for {fileName}.");
-
-            uploadedFiles.Add(fileName);
+            sessions.Add(new { fileName, uploadUrl });
         }
 
-        if (uploadedFiles.Count == 0)
-            return Results.BadRequest("No files uploaded.");
+        if (sessions.Count == 0)
+            return Results.BadRequest("No valid file names provided.");
 
-        return Results.Ok(new { Message = "Files uploaded successfully", Files = uploadedFiles });
+        return Results.Ok(sessions);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"[UPLOAD ERROR] {ex}");
-        return Results.Problem($"Upload failed: {ex.Message}");
+        return Results.Problem($"Failed to create upload sessions: {ex.Message}");
     }
-}).WithName("UploadImages");
+}).WithName("CreateUploadSessions");
 
 
 app.MapGet("/get-homepage-images/{count}", async (int count, HttpRequest request, IConfiguration config, IDistributedCache cache, IWebHostEnvironment env) =>

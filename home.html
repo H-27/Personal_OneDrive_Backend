@@ -106,33 +106,79 @@
 
         uploadBtn.addEventListener('click', () => { fileUploadInput.click(); });
 
+        // Upload chunk size: must be a multiple of 320 KiB for all but the final chunk.
+        // 320 KiB * 16 = 5 MiB.
+        const UPLOAD_CHUNK_SIZE = 320 * 1024 * 16;
+
+        // PUT a file's bytes straight to its pre-authorized OneDrive upload URL.
+        // No auth headers go here — the URL itself is the credential, and the bytes
+        // never pass through Render, which is the whole point (bandwidth saving).
+        async function uploadFileToOneDrive(uploadUrl, file) {
+            if (file.size === 0) {
+                const res = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Range': `bytes */0` },
+                    body: new Blob()
+                });
+                if (!res.ok) throw new Error(`Upload failed for ${file.name} (${res.status})`);
+                return;
+            }
+
+            let start = 0;
+            while (start < file.size) {
+                const end = Math.min(start + UPLOAD_CHUNK_SIZE, file.size);
+                const chunk = file.slice(start, end);
+                const res = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Range': `bytes ${start}-${end - 1}/${file.size}` },
+                    body: chunk
+                });
+                // 202 = chunk accepted, more to come; 200/201 = final chunk stored.
+                if (res.status !== 202 && !res.ok) {
+                    throw new Error(`Upload failed for ${file.name} (${res.status})`);
+                }
+                start = end;
+            }
+        }
+
         // Handle Image Upload
         fileUploadInput.addEventListener('change', async (event) => {
-            const files = event.target.files;
-            if (!files || files.length === 0) return;
+            const files = Array.from(event.target.files || []);
+            if (files.length === 0) return;
 
             if (loadingOverlay) loadingOverlay.classList.remove('hidden');
 
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) { formData.append('files', files[i]); }
-
             try {
-                const response = await fetch(`${API_BASE_URL}/upload-images?cb=${new Date().getTime()}`, {
+                // Ask the backend for one pre-authorized upload URL per file.
+                const sessionResponse = await fetch(`${API_BASE_URL}/create-upload-sessions?cb=${new Date().getTime()}`, {
                     method: 'POST',
-                    headers: { 
+                    headers: {
+                        'Content-Type': 'application/json',
                         'X-Custom-Auth-Key': CUSTOM_API_KEY,
                         'X-Microsoft-Account-Id': MS_ACCOUNT_ID
                     },
-                    body: formData
+                    body: JSON.stringify({ fileNames: files.map(f => f.name) })
                 });
-                if (!response.ok) throw new Error('Upload failed');
+                if (!sessionResponse.ok) throw new Error('Could not create upload sessions');
+
+                const sessions = await sessionResponse.json();
+                const urlByName = {};
+                for (const s of sessions) { urlByName[s.fileName || s.FileName] = s.uploadUrl || s.UploadUrl; }
+
+                // Upload each file's bytes directly to OneDrive, bypassing Render.
+                await Promise.all(files.map(async (file) => {
+                    const uploadUrl = urlByName[file.name];
+                    if (!uploadUrl) throw new Error(`No upload URL for ${file.name}`);
+                    await uploadFileToOneDrive(uploadUrl, file);
+                }));
+
                 alert("Upload successful!");
-                await loadRandomImages(); 
+                await loadRandomImages();
             } catch (error) {
                 alert('Upload failed.');
-                if (loadingOverlay) loadingOverlay.classList.add('hidden'); 
-            } finally { 
-                fileUploadInput.value = ''; 
+                if (loadingOverlay) loadingOverlay.classList.add('hidden');
+            } finally {
+                fileUploadInput.value = '';
             }
         });
 
