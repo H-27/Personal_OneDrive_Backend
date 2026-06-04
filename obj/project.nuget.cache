@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "i8HQIazMsyI=",
+  "dgSpecHash": "60PVl1JDS0g=",
   "success": true,
-  "projectFilePath": "c:\\Users\\Work\\VSCodeProjects\\Personal_OneDrive_Backend\\Personal_OneDrive_Backend.csproj",
+  "projectFilePath": "C:\\Users\\Work\\VSCodeProjects\\Personal_OneDrive_Backend\\Personal_OneDrive_Backend.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Work\\.nuget\\packages\\azure.core\\1.50.0\\azure.core.1.50.0.nupkg.sha512",
     "C:\\Users\\Work\\.nuget\\packages\\azure.identity\\1.17.2\\azure.identity.1.17.2.nupkg.sha512",

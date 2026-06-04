@@ -586,6 +586,7 @@ app.MapPost("/upload-images", async (HttpRequest request, IConfiguration config,
             {
                 Item = new Microsoft.Graph.Models.DriveItemUploadableProperties
                 {
+                    OdataType = null,
                     Name = fileName,
                     AdditionalData = new Dictionary<string, object>
                     {
